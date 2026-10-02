@@ -22,14 +22,14 @@ def clip_seconds(path):
     return n / fps if n else 0.0
 
 
-def run_vss(query, k, progress):
+def run_vss(query, k, progress, camera=None):
     """The event stack: VAST search -> segments, YOLO detections already computed at ingest (free
     filter), download the segment, Cosmos3-Reason segments the steps."""
     from . import vss
     run_dir = config.OUT / slug(query)
     (run_dir / "clips").mkdir(parents=True, exist_ok=True)
     t0 = time.time()
-    hits = vss.search(query, top_k=k)
+    hits = vss.search(query, top_k=k, metadata_filters={"camera_id": camera} if camera else None)
     progress(f"VAST search: {len(hits)} segments")
     need = [c.strip() for c in __import__("os").getenv("HARVEST_NEED", "person").split(",") if c.strip()]
     stats = {"query": query, "backend": "vss", "ranges": len(hits), "kept": 0, "labelled": 0, "yolo_s": 0.0,
@@ -69,9 +69,9 @@ def run_vss(query, k, progress):
     return run_dir, records, stats
 
 
-def run(query, k=50, backend=None, progress=print):
+def run(query, k=50, backend=None, progress=print, camera=None):
     if (backend or config.SEARCH_BACKEND) == "vss":
-        return run_vss(query, k, progress)
+        return run_vss(query, k, progress, camera)
     run_dir = config.OUT / slug(query)
     (run_dir / "clips").mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -119,5 +119,6 @@ if __name__ == "__main__":
     ap.add_argument("query")
     ap.add_argument("--k", type=int, default=50)
     ap.add_argument("--backend", default=None)
+    ap.add_argument("--camera", default=None, help="VSS camera_id, e.g. sdg_warehouse_cam-2")
     a = ap.parse_args()
-    run(a.query, a.k, a.backend)
+    run(a.query, a.k, a.backend, camera=a.camera)

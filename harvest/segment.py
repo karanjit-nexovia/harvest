@@ -70,7 +70,20 @@ def _frames_content(path, n):
     return parts
 
 
-_MODE = {"input": None}      # what this endpoint accepted last ("video" / "frames")
+_MODE = {"input": None, "guided": True}   # what this endpoint accepted ("video"/"frames"; guided JSON)
+
+
+def _create(messages):
+    kw = dict(model=model_id(), messages=messages, temperature=0.2, max_tokens=800)
+    if _MODE["guided"]:
+        try:
+            return client().chat.completions.create(**kw, extra_body={"guided_json": SCHEMA})
+        except Exception as e:  # noqa: BLE001
+            if "guided" not in str(e).lower() and "422" not in str(e) and "400" not in str(e):
+                raise
+            _MODE["guided"] = False
+            print("cosmos: guided JSON not supported, parsing leniently")
+    return client().chat.completions.create(**kw)
 
 
 def _content(path, mode):
@@ -80,11 +93,49 @@ def _content(path, mode):
     return _frames_content(path, min(5, config.COSMOS_FRAMES))
 
 
+def _nearest(name, allowed, default):
+    n = re.sub(r"[^a-z_]", "", str(name).lower().replace(" ", "_"))
+    if n in allowed:
+        return n
+    for a in allowed:                      # push_or_pull_cart -> push_or_pull, picking_up -> ...
+        if a in n or n in a:
+            return a
+    for a in allowed:
+        if a.split("_")[0] in n:
+            return a
+    return default
+
+
+def _loads(raw):
+    try:
+        return json.loads(raw)
+    except ValueError:
+        fixed = re.sub(r",\s*([}\]])", r"", raw)                    # trailing commas
+        fixed = re.sub(r"}\s*{", "},{", fixed)                         # missing comma between objects
+        fixed = re.sub(r"\"\s*
+\s*\"", '","', fixed)                    # missing comma between strings
+        return json.loads(fixed)
+
+
 def _parse(text):
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         raise ValueError("no JSON object in the reply")
-    data = json.loads(m.group(0))
+    data = _loads(m.group(0))
+    # forgiving: map near-miss names onto the vocabulary instead of failing the clip
+    data["label"] = _nearest(data.get("label", "other"), config.LABELS, "other")
+    steps = []
+    for st in data.get("steps") or []:
+        try:
+            a, b = float(st.get("start_s", 0)), float(st.get("end_s", 0))
+        except (TypeError, ValueError):
+            continue
+        steps.append({"name": _nearest(st.get("name", "idle"), config.STEP_NAMES, "idle"),
+                      "start_s": min(a, b), "end_s": max(a, b), "conf": float(st.get("conf", 0.5) or 0.5)})
+    data["steps"] = steps
+    data.setdefault("objects", [])
+    data["objects"] = [str(o) for o in data["objects"]] if isinstance(data["objects"], list) else []
+    data["notes"] = str(data.get("notes", ""))
     jsonschema.validate(data, SCHEMA)
     return data
 
@@ -108,7 +159,7 @@ def segment(path, duration):
     err = None
     if config.COSMOS_INPUT == "auto" and mode == "video" and _MODE["input"] is None:
         try:   # does this endpoint take video? (once)
-            r = client().chat.completions.create(model=model_id(), messages=messages, temperature=0.2, max_tokens=800)
+            r = _create(messages)
             _MODE["input"] = "video"
             try:
                 return _parse(r.choices[0].message.content or ""), time.time() - t0, None
@@ -122,8 +173,7 @@ def segment(path, duration):
             messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + _content(path, "frames")}]
     for attempt in range(2):
         try:
-            r = client().chat.completions.create(model=model_id(), messages=messages,
-                                                 temperature=0.2, max_tokens=800)
+            r = _create(messages)
             text = r.choices[0].message.content or ""
             return _parse(text), time.time() - t0, None
         except Exception as e:  # noqa: BLE001
