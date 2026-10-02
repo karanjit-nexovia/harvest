@@ -8,6 +8,7 @@ dataset export, with accuracy and GPU-cost numbers in Weights & Biases.
 query ─► search (VAST / CLIP / motion) ─► YOLO + pose filter (cheap, edge-able)
       ─► cut clips ─► Cosmos: reach / grasp / pull / … with timestamps (JSON)
       ─► eval vs hand labels + cost vs "Cosmos on everything" ─► export dataset.zip
+      ─► train: a small pose model learns the steps from the harvest (scored on unseen clips)
 ```
 
 ## Run it (5 min)
@@ -28,6 +29,7 @@ CLI:
 python -m harvest.pipeline "person takes an item from a shelf" --k 50
 python -m harvest.evaluate out/person_takes_an_item_from_a_shelf --wandb
 python -m harvest.export   out/person_takes_an_item_from_a_shelf
+python -m harvest.train    out/person_takes_an_item_from_a_shelf --wandb
 ```
 
 ## Wiring the event's stack (.env)
@@ -44,6 +46,8 @@ python -m harvest.export   out/person_takes_an_item_from_a_shelf
 1. Precompute 2–3 queries before demos (the Harvest page lists past runs instantly).
 2. Label 20 clips on the **Label** page *before* looking at Cosmos's steps.
 3. **Evaluate** → W&B report: label accuracy, step recall/precision, boundary error, GPU saving ×.
-4. Record a backup screen video.
+4. **Train** page → "Train step model": the student model's step accuracy on unseen clips, with
+   Cosmos (teacher) and student timelines side by side. That's "data → working model in an afternoon".
+5. Record a backup screen video.
 
 Test videos in `data/raw/` are Intel IoT DevKit samples (CC BY 4.0). Use the event's videos for the demo.

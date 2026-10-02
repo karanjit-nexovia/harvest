@@ -9,3 +9,5 @@ pandas
 lap
 # optional, for SEARCH_BACKEND=clip
 # torch transformers
+scikit-learn
+joblib

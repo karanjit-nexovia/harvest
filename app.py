@@ -36,7 +36,7 @@ def timeline(rec):
             f'<div style="font-size:12px">{legend}</div>')
 
 
-page = st.sidebar.radio("Page", ["Harvest", "Label", "Evaluate"])
+page = st.sidebar.radio("Page", ["Harvest", "Label", "Evaluate", "Train"])
 st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if config.MOCK else config.COSMOS_MODEL}")
 
 if page == "Harvest":
@@ -121,6 +121,43 @@ elif page == "Label":
         with open(lab_path, "w") as fh:
             fh.writelines(json.dumps(v) + "\n" for v in done.values())
         st.rerun()
+
+elif page == "Train":
+    st.title("Train on the harvest")
+    st.caption("Close the loop: a small pose model learns the steps from Harvest's labels, scored on clips it never saw.")
+    all_runs = runs()
+    if not all_runs:
+        st.stop()
+    run_dir = st.selectbox("Run", all_runs, format_func=lambda p: p.name)
+    log = st.checkbox("Log to Weights & Biases")
+    if st.button("Train step model", type="primary"):
+        from harvest import train
+        with st.spinner("Reading poses and training..."):
+            train.train(run_dir, use_wandb=log)
+    if (run_dir / "train.json").exists():
+        t = json.load(open(run_dir / "train.json"))
+        c = st.columns(4)
+        c[0].metric("Clips (train/test)", f"{t['clips_train']}/{t['clips_test']}")
+        c[1].metric("Step accuracy, unseen clips", f"{t['frame_acc']:.0%}", f"{t['frame_acc'] - t['baseline_majority_acc']:+.0%} vs guessing")
+        c[2].metric("Macro F1", f"{t['macro_f1']:.2f}")
+        c[3].metric("Frames", t["frames_train"] + t["frames_test"])
+        recs = {r["clip_id"]: r for r in load(run_dir)[0]}
+        cid = st.selectbox("Unseen clip", t["test_clips"])
+        r = recs[cid]
+        st.video(str(run_dir / r["file"]))
+        st.markdown("**Cosmos (teacher)**")
+        st.markdown(timeline(r), unsafe_allow_html=True)
+        from harvest import train
+        seq = train.predict(run_dir, run_dir / r["file"])
+        steps, cur = [], None
+        for ts, name in seq:
+            if cur and cur["name"] == name:
+                cur["end_s"] = ts + 0.2
+            else:
+                cur = {"name": name, "start_s": ts, "end_s": ts + 0.2}
+                steps.append(cur)
+        st.markdown("**Trained pose model (student)**")
+        st.markdown(timeline(dict(r, steps=steps)), unsafe_allow_html=True)
 
 else:
     st.title("Accuracy and cost")
