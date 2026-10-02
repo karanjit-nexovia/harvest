@@ -160,6 +160,7 @@ def report(recs):
     by_obj_cam = collections.defaultdict(lambda: [0, 0])
     by_cond = collections.defaultdict(lambda: [0, 0])
     fails = collections.defaultdict(list)
+    calls = collections.defaultdict(collections.Counter)
     for r in ok:
         for c in r["checks"]:
             if c["coco_class"] is None:
@@ -178,6 +179,7 @@ def report(recs):
                     by_cond[(c["object"], k, v)][0] += c["yolo_found"]
             if not c["yolo_found"]:
                 fails[c["object"]].append(r["clip_id"])
+                calls[c["object"]].update(r.get("phantoms", []))
     def mean(xs):
         return round(sum(xs) / len(xs), 3) if xs else None
     objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": OBJECTS[o] is not None,
@@ -187,15 +189,17 @@ def report(recs):
     phantom_by_cam = collections.Counter((r["camera_id"], p) for r in ok for p in r.get("phantoms", []))
     worst = sorted(((o, v) for o, v in objects.items() if v["seen"] >= 2), key=lambda kv: (kv[1]["rate"] or 0))
     head = ", ".join(f"{o} {int(100 * (v['rate'] or 0))}% detected ({v['seen']} clips)" for o, v in worst[:3])
-    under = sorted(((o, v) for o, v in objects.items() if v["has_class"] and v["seen"] >= 2
-                    and v["count_recall"] is not None), key=lambda kv: kv[1]["count_recall"])
-    if under:
-        o, v = under[0]
-        head += f"; {o}: YOLO finds {int(100 * v['count_recall'])}% of them per frame"
-    if phantom:
-        top = phantom.most_common(1)[0]
-        head += f"; phantom '{top[0]}' in {top[1]} of {len(ok)} clips"
-    return {"headline": head, "objects": objects,
+    # count_recall stays in the data but out of the headline: the sidecar's frame_count covers every
+    # frame while YOLO ran on a sample, so objects-per-frame is not calibrated yet
+    mislabels = {o: [{"yolo_label": p, "clips": n} for p, n in calls[o].most_common(4)] for o in fails if calls[o]}
+    if worst and worst[0][0] in mislabels:
+        o = worst[0][0]
+        head += f"; YOLO calls the {o} " + ", ".join(f"'{m['yolo_label']}'" for m in mislabels[o][:3])
+    clips_per_cam = collections.Counter(r["camera_id"] for r in ok)
+    if phantom_by_cam:
+        (cam, p), n = phantom_by_cam.most_common(1)[0]
+        head += f"; '{p}' reported on {cam} in {n} of {clips_per_cam[cam]} clips"
+    return {"headline": head, "objects": objects, "mislabels": mislabels,
             "phantoms": [{"yolo_label": p, "clips": n, "of": len(ok)} for p, n in phantom.most_common()],
             "phantoms_by_camera": [{"camera": c, "yolo_label": p, "clips": n} for (c, p), n in phantom_by_cam.most_common()],
             "by_camera": [{"object": o, "camera": c, "detected": f, "seen": t, "rate": _rate(f, t)}
@@ -214,9 +218,11 @@ def log_wandb(out_dir):
     rep = json.load(open(out_dir / "report.json"))
     wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None,
                     name=f"blindspot-{out_dir.name}", job_type="audit", config=rep.get("run", {}))
-    wb.log({"count_recall": wandb.plot.bar(wandb.Table(
-        data=[[o, v.get("count_recall") or 0] for o, v in rep["objects"].items()], columns=["object", "count_recall"]),
-        "object", "count_recall", title="Share of objects YOLO11 finds per frame (vs Cosmos count)")})
+    wb.summary["headline"] = rep["headline"]
+    wb.log({"mislabels": wandb.Table(columns=["missed_object", "yolo_said_instead", "clips"],
+                                     data=[[o, m["yolo_label"], m["clips"]] for o, ms in rep.get("mislabels", {}).items() for m in ms]),
+            "phantoms_by_camera": wandb.Table(dataframe=__import__("pandas").DataFrame(rep.get("phantoms_by_camera", []))
+                                              if rep.get("phantoms_by_camera") else None)})
     wb.log({"objects": wandb.plot.bar(wandb.Table(
         data=[[o, v["rate"] or 0] for o, v in rep["objects"].items()], columns=["object", "yolo_detection_rate"]),
         "object", "yolo_detection_rate", title="YOLO11 detection rate vs Cosmos3-Reason inventory")})
