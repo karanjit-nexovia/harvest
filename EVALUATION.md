@@ -1,4 +1,47 @@
-# Harvest: inputs, outputs, and how we evaluate it
+# Blindspot: inputs, outputs, evaluation
+
+## Sponsor tools
+| Tool | Role in Blindspot | Code |
+|---|---|---|
+| **VAST Data** (DataEngine, VastDB, VSS API) | the archive, the search used to sample it, and the YOLO11 detections being audited | `harvest/vss.py` |
+| **NVIDIA Cosmos3-Reason** | the judge: what is really in each clip | `harvest/audit.py: inventory()` |
+| **YOLO11** (ran at ingest) | the model under audit | read through `/api/v1/videos/detections` |
+| **Weights & Biases** | each audit logged as a run: detection rate, count recall, failures table | `audit.log_wandb()` |
+| **W&B Inference** (Llama-3.1-8B) | turns a plain-English request into queries and a camera (Harvest page) | `harvest/planner.py` |
+| **CoreWeave GPUs** | hosts Cosmos3-Reason, YOLO11 and Cosmos Embed | event stack |
+
+## Inputs
+- The camera packs to audit (e.g. `sdg_warehouse_cam-2, i24_cam-1, pie_cam-3, smartspace_cam-1`) and the clips per camera.
+- Team credentials from `/config/<team>.config` or the VM env. Nothing is hard-coded or printed.
+
+## Outputs (`out/audit_MMDD_HHMM/`)
+| File | What |
+|---|---|
+| `clips/*.mp4` | the audited clips |
+| `clips.jsonl` | per clip: camera, Cosmos inventory + conditions, YOLO classes and objects per frame, per-object checks (`yolo_found`, `yolo_avg_count`, `count_recall`), `phantoms` |
+| `report.json` | headline; per object: seen, detected, rate, `count_recall`, has_class; phantoms; by camera; by condition; retrain list |
+| `retrain.zip` | the failing clips plus their Cosmos labels, ready for annotation and retraining |
+
+## Metrics
+- **Detection rate** (per object) = clips where YOLO named the object ÷ clips where Cosmos saw it.
+- **Count recall** (per object) = mean over clips of min(1, YOLO objects per frame ÷ Cosmos count). It catches the case where the detection rate looks perfect but YOLO only sees half the cars.
+- **Phantom rate** = clips where YOLO reported a class Cosmos did not see.
+- **Has class**: if COCO has no class for the object (forklift, pallet, box, cart, rack, cone), no threshold change will fix it, only retraining will.
+
+## Limits (stated honestly)
+- Cosmos is the judge, not ground truth. Spot-check a sample of its inventories by eye before trusting a rate.
+- Count recall compares a per-frame average with Cosmos's "typically visible at once" count, so it is approximate. Use it to rank failures, not as an exact figure.
+- Sampling goes through search, so clips are biased toward what the queries match.
+
+## Reproduce
+```bash
+python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
+python3 -m streamlit run app.py --server.port 8501   # Blindspot page: charts, failures, export
+```
+
+---
+
+# Harvest page: inputs, outputs, evaluation
 
 ## Sponsor tools used
 | Tool | Where |

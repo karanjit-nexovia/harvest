@@ -1,4 +1,70 @@
-# Harvest — architecture
+# Blindspot: architecture
+
+**Blindspot finds where a deployed vision model fails, across the whole archive, and hands you the clips to fix it.**
+
+Every camera in the VAST pipeline already runs YOLO11 at ingest, and those detections sit in VastDB.
+Nobody grades them. Blindspot uses NVIDIA Cosmos3-Reason as a judge: for each sampled clip, Cosmos lists
+what is actually there (objects, counts, conditions). Blindspot compares that with what YOLO stored and reports:
+
+- **Missed entirely**: the object is there and YOLO never names it (forklift: 0%, because COCO has no forklift class).
+- **Undercounted**: YOLO finds the object, but only part of them. `count_recall` = YOLO objects per frame ÷ Cosmos count.
+- **Phantoms**: YOLO reports a class that Cosmos does not see (for example a "cow" on the I-24 highway).
+- **Where it fails**: everything above broken down by camera and by condition (lighting, crowding, occlusion, distance).
+- **The fix**: the failing clips go out as a retraining set (`retrain.zip`).
+
+> How this differs from the event's Video Search & Summary app: VSS helps a *person* find and describe a
+> moment. Blindspot grades the *perception model* that is already running on every camera, and turns its
+> failures into training data.
+
+```mermaid
+flowchart LR
+    subgraph VAST["VAST Data AI OS (team-4)"]
+        DB[("VastDB<br/>segments · embeddings · YOLO11 sidecars")]
+        API["VSS backend API<br/>/search · /videos/stream · /videos/detections · /dashboard/stats"]
+        DB --> API
+    end
+    subgraph CW["CoreWeave GPUs"]
+        Y["YOLO11 (COCO)<br/>ran at ingest = the model under audit"]
+        CR["NVIDIA Cosmos3-Reason<br/><b>the judge</b>"]
+    end
+    subgraph B["Blindspot (harvest/audit.py + Streamlit app)"]
+        S["sample(): per camera,<br/>hybrid search, dedupe"]
+        D["download clip"]
+        I["inventory(): Cosmos lists<br/>objects · counts · conditions"]
+        C["compare with YOLO sidecar<br/>found? · count_recall · phantoms"]
+        R["report(): by object,<br/>camera, condition"]
+        X["export_retrain(): retrain.zip"]
+    end
+    subgraph WB["Weights & Biases"]
+        L["Experiments: detection rate,<br/>count recall, failures table"]
+    end
+    Y -. wrote .-> DB
+    S -- "/search camera_id=..." --> API
+    API -- mp4 --> D --> I
+    I -- "chat/completions, guided JSON<br/>(video, or 5 frames)" --> CR
+    API -- "/videos/detections" --> C
+    I --> C --> R --> X
+    R --> L
+```
+
+## Data flow, one clip
+
+| Step | Code | Input | Output |
+|---|---|---|---|
+| 1. Sample | `audit.sample()` | camera id, queries | archive segment ids (`source`) |
+| 2. Download | `vss.download()` | `source` | `clips/<id>.mp4` |
+| 3. Judge | `audit.inventory()` → Cosmos3-Reason | the clip | `{"objects":[{name,count,visibility}], "conditions":{lighting,crowding,occlusion,distance}}` |
+| 4. Read YOLO | `vss.detections()`, `vss.class_counts()`, `vss.per_frame()` | `source` | classes found; objects per frame = `object_counts / frame_count` |
+| 5. Compare | `audit.run()` | 3 + 4 | per object: `yolo_found`, `yolo_avg_count`, `count_recall`; per clip: `phantoms` |
+| 6. Aggregate | `audit.report()` | all clips | `report.json`: headline, objects, phantoms, by_camera, by_condition, retrain list |
+| 7. Log / export | `audit.log_wandb()`, `audit.export_retrain()` | run dir | W&B run, `retrain.zip` |
+
+Cost note: YOLO already ran at ingest, so the audit reads it for free. The only new GPU work is one
+Cosmos call per sampled clip (about 4 s each).
+
+---
+
+# Harvest (the data-mining page): architecture
 
 **Harvest turns an existing video archive into training data for AI systems** (warehouse robots,
 self-driving stacks, safety and store analytics), and proves the data is good.
