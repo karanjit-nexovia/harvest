@@ -14,7 +14,64 @@ def slug(q):
     return re.sub(r"[^a-z0-9]+", "_", q.lower()).strip("_")[:40]
 
 
+def clip_seconds(path):
+    import cv2
+    cap = cv2.VideoCapture(str(path))
+    n, fps = cap.get(cv2.CAP_PROP_FRAME_COUNT), cap.get(cv2.CAP_PROP_FPS) or 25
+    cap.release()
+    return n / fps if n else 0.0
+
+
+def run_vss(query, k, progress):
+    """The event stack: VAST search -> segments, YOLO detections already computed at ingest (free
+    filter), download the segment, Cosmos3-Reason segments the steps."""
+    from . import vss
+    run_dir = config.OUT / slug(query)
+    (run_dir / "clips").mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    hits = vss.search(query, top_k=k)
+    progress(f"VAST search: {len(hits)} segments")
+    need = [c.strip() for c in __import__("os").getenv("HARVEST_NEED", "person").split(",") if c.strip()]
+    stats = {"query": query, "backend": "vss", "ranges": len(hits), "kept": 0, "labelled": 0, "yolo_s": 0.0,
+             "cosmos_s": 0.0, "failed": 0, "searched_video_s": 0.0,
+             "candidate_s": round(sum(h["end"] - h["start"] for h in hits), 1)}
+    records = []
+    for n, h in enumerate(hits):
+        counts = vss.class_counts(vss.detections(h["source"]))
+        keep = (not counts) or any(counts.get(c, 0) for c in need)   # no sidecar: let Cosmos judge
+        progress(f"[{n + 1}/{len(hits)}] {h['camera_id'] or h['source'][-40:]} score {h['score']:.2f} "
+                 f"{'KEEP' if keep else 'drop'} {dict(list(counts.items())[:6])}")
+        if not keep:
+            continue
+        stats["kept"] += 1
+        clip_id = f"seg{n:03d}"
+        path = vss.download(h["source"], run_dir / "clips" / f"{clip_id}.mp4")
+        dur = clip_seconds(path) or (h["end"] - h["start"])
+        result, secs, err = segment.segment(path, dur)
+        stats["cosmos_s"] += secs
+        stats["failed"] += err is not None
+        stats["labelled"] += err is None and result["label"] != "other"
+        records.append({"clip_id": clip_id, "video": h["original_video"] or h["source"], "source": h["source"],
+                        "start": 0.0, "end": round(dur, 2), "query": query, "search_score": round(h["score"], 3),
+                        "camera_id": h["camera_id"], "location": h["location"], "index_caption": h["reasoning"][:400],
+                        "tracks": counts, "label": result["label"], "steps": result["steps"],
+                        "objects": result.get("objects", []), "notes": result.get("notes", ""), "error": err,
+                        "gpu_s": {"yolo": 0.0, "cosmos": round(secs, 2)}, "file": f"clips/{clip_id}.mp4"})
+        with open(run_dir / "clips.jsonl", "w") as fh:
+            fh.writelines(json.dumps(r) + "\n" for r in records)
+    stats["searched_video_s"] = round(sum(r["end"] for r in records), 1)
+    stats["wall_s"] = round(time.time() - t0, 1)
+    stats["cosmos_s"] = round(stats["cosmos_s"], 1)
+    json.dump(stats, open(run_dir / "stats.json", "w"), indent=1)
+    with open(run_dir / "clips.jsonl", "w") as fh:
+        fh.writelines(json.dumps(r) + "\n" for r in records)
+    progress(f"done: {stats}")
+    return run_dir, records, stats
+
+
 def run(query, k=50, backend=None, progress=print):
+    if (backend or config.SEARCH_BACKEND) == "vss":
+        return run_vss(query, k, progress)
     run_dir = config.OUT / slug(query)
     (run_dir / "clips").mkdir(parents=True, exist_ok=True)
     t0 = time.time()

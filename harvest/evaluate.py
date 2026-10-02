@@ -48,6 +48,7 @@ def score(pred, truth):
 
 def cost(stats):
     per_cosmos = stats["cosmos_s"] / max(1, stats["kept"])
+    # A = Cosmos on every search hit; on the event stack YOLO already ran at ingest, so B adds 0 for it
     a = per_cosmos * stats["ranges"]
     b = stats["yolo_s"] + stats["cosmos_s"]
     usable = max(1, stats["labelled"])

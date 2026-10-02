@@ -14,8 +14,8 @@ import jsonschema
 
 from . import config
 
-PROMPT = f"""You are labeling training data for robots. Watch the clip and segment the main person's
-hand-object action into steps. Use only these step names: {", ".join(config.STEP_NAMES)}.
+PROMPT = f"""You are labeling training data for warehouse robots. Watch the clip and segment the main
+person's (or forklift's) physical action into steps. Use only these step names: {", ".join(config.STEP_NAMES)}.
 Return ONLY JSON, no prose:
 {{"label": one of {config.LABELS},
  "steps": [{{"name": ..., "start_s": ..., "end_s": ..., "conf": 0-1}}],
@@ -39,8 +39,17 @@ _CLIENT = {}
 def client():
     if "c" not in _CLIENT:
         from openai import OpenAI
-        _CLIENT["c"] = OpenAI(base_url=config.COSMOS_BASE_URL, api_key=config.COSMOS_API_KEY or "none")
+        from . import vss
+        base = config.COSMOS_BASE_URL or (vss.cosmos_url().rstrip("/") + "/v1")
+        key = config.COSMOS_API_KEY or vss.gpu_token() or "none"
+        _CLIENT["c"] = OpenAI(base_url=base, api_key=key)
+        _CLIENT["model"] = config.COSMOS_MODEL or _CLIENT["c"].models.list().data[0].id
     return _CLIENT["c"]
+
+
+def model_id():
+    client()
+    return _CLIENT["model"]
 
 
 def _frames_content(path, n):
@@ -80,8 +89,8 @@ def _parse(text):
 def _mock(path, duration):
     d = max(duration, 1.0)
     cuts = [0, 0.2, 0.4, 0.7, 1.0]
-    names = ["reach", "grasp", "lift_or_pull", "move"]
-    return {"label": "take_item", "objects": ["item"], "notes": "mock",
+    names = ["approach", "reach", "grasp", "lift"]
+    return {"label": "pick_up_object", "objects": ["item"], "notes": "mock",
             "steps": [{"name": n, "start_s": round(a * d, 1), "end_s": round(b * d, 1), "conf": 0.5}
                       for n, a, b in zip(names, cuts, cuts[1:])]}
 
@@ -95,7 +104,7 @@ def segment(path, duration):
     err = None
     for attempt in range(2):
         try:
-            r = client().chat.completions.create(model=config.COSMOS_MODEL, messages=messages,
+            r = client().chat.completions.create(model=model_id(), messages=messages,
                                                  temperature=0.2, max_tokens=800)
             text = r.choices[0].message.content or ""
             return _parse(text), time.time() - t0, None
