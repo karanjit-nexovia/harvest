@@ -1,7 +1,7 @@
-# Blindspot
+# Harvest
 
 **Your vision model is already running on every camera. Nobody checks it.**
-Blindspot uses NVIDIA Cosmos3-Reason as a judge over the VAST-indexed video archive, grades the YOLO11
+Harvest runs a **Blindspot audit**: it uses NVIDIA Cosmos3-Reason as a judge over the VAST-indexed video archive, grades the YOLO11
 detections the pipeline stored at ingest, and finds where the model is blind — by object, by camera
 and by condition (lighting, crowding, occlusion, distance). Then it hands you the failing clips as a
 retraining set, and logs the whole audit to Weights & Biases.
@@ -19,14 +19,14 @@ retraining set, and logs the whole audit to Weights & Biases.
 
 ```bash
 python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
-python3 -m streamlit run app.py      # Blindspot page: charts, failures, export the retraining set
+python3 -m streamlit run app.py      # Blindspot audit page: charts, failures, export the retraining set
 ```
 
 **[Architecture →](ARCHITECTURE.md)** · **[Inputs, outputs and evaluation →](EVALUATION.md)**
 
 ---
 
-## Also in this repo: Harvest (labelled training clips from a plain-English request)
+## Second mode: Mine clips (labelled training clips from a plain-English request)
 
 
 **Turn the video archive you already have into training data for AI systems** — warehouse

@@ -1,7 +1,7 @@
-"""Blindspot: audit the perception model the stack already runs, against the video archive.
+"""Harvest Blindspot audit: audit the perception model the stack already runs, against the video archive.
 
 The VAST DataEngine ran YOLO11 (COCO, 80 classes) on every segment at ingest and stored the detections.
-Nobody checks them. Blindspot samples segments from each camera pack (VAST search), asks NVIDIA
+Nobody checks them. Harvest samples segments from each camera pack (VAST search), asks NVIDIA
 Cosmos3-Reason for a strict inventory of what is really in each clip (objects + conditions), and
 compares it with YOLO's stored detections:
 
@@ -247,7 +247,7 @@ def export_retrain(out_dir):
                 fh.write(json.dumps({"clip_id": cid, "file": r["file"], "missed_object": obj,
                                      "cosmos_inventory": r["inventory"], "conditions": r["conditions"],
                                      "camera_id": r["camera_id"], "source": r["source"]}) + "\n")
-    (ds / "README.md").write_text("# Blindspot retraining set\n\nClips where the deployed YOLO11 missed an object "
+    (ds / "README.md").write_text("# Harvest retraining set (Blindspot audit)\n\nClips where the deployed YOLO11 missed an object "
                                   "Cosmos3-Reason saw. Weak labels: Cosmos inventory + conditions.\n\n"
                                   f"{json.dumps(rep['objects'], indent=1)}\n")
     return shutil.make_archive(str(out_dir / "retrain"), "zip", ds)

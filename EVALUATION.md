@@ -1,7 +1,7 @@
-# Blindspot: inputs, outputs, evaluation
+# Harvest: inputs, outputs, evaluation (Blindspot audit)
 
 ## Sponsor tools
-| Tool | Role in Blindspot | Code |
+| Tool | Role in Harvest | Code |
 |---|---|---|
 | **VAST Data** (DataEngine, VastDB, VSS API) | the archive, the search used to sample it, and the YOLO11 detections being audited | `harvest/vss.py` |
 | **NVIDIA Cosmos3-Reason** | the judge: what is really in each clip | `harvest/audit.py: inventory()` |
@@ -36,12 +36,12 @@
 ## Reproduce
 ```bash
 python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
-python3 -m streamlit run app.py --server.port 8501   # Blindspot page: charts, failures, export
+python3 -m streamlit run app.py --server.port 8501   # Blindspot audit page: charts, failures, export
 ```
 
 ---
 
-# Harvest page: inputs, outputs, evaluation
+# Second mode (Mine clips): inputs, outputs, evaluation
 
 ## Sponsor tools used
 | Tool | Where |

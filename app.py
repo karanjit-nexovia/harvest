@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Blindspot", layout="wide")
+st.set_page_config(page_title="Harvest", layout="wide")
 from harvest import config  # noqa: E402
 
 _PALETTE = ["#4C9AFF", "#36B37E", "#FFAB00", "#6554C0", "#00B8D9", "#FF5630", "#FF8B00", "#57D9A3",
@@ -39,14 +39,14 @@ def timeline(rec):
             f'<div style="font-size:12px">{legend}</div>')
 
 
-page = st.sidebar.radio("Page", ["Blindspot", "Harvest", "Label", "Evaluate", "Train"])
+page = st.sidebar.radio("Page", ["Blindspot audit", "Mine clips", "Label", "Evaluate", "Train"])
 st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if config.MOCK else config.COSMOS_MODEL}")
 
-if page == "Blindspot":
+if page == "Blindspot audit":
     import pandas as pd
     from harvest import audit
-    st.title("Blindspot")
-    st.caption("Your perception model is already running on every camera. Where does it fail? Blindspot uses "
+    st.title("Harvest: Blindspot audit")
+    st.caption("Your perception model is already running on every camera. Where does it fail? Harvest uses "
                "NVIDIA Cosmos3-Reason as a judge over the VAST archive, grades the YOLO11 detections stored at "
                "ingest, and hands you the clips to retrain on.")
     cams = ["sdg_warehouse_cam-2", "i24_cam-1", "pie_cam-3", "smartspace_cam-1", "neighborhood_cam-1",
@@ -115,8 +115,8 @@ if page == "Blindspot":
         z = audit.export_retrain(out)
         b2.download_button("Download retraining set (zip)", open(z, "rb"), file_name=f"{out.name}_retrain.zip")
 
-elif page == "Harvest":
-    st.title("Harvest")
+elif page == "Mine clips":
+    st.title("Harvest: mine clips")
     st.caption("Describe what your AI system must learn — a robot, a self-driving stack, a safety or "
                "store-analytics model. Get back segmented, labelled training clips from your video archive.")
     c1, c2 = st.columns([4, 1])

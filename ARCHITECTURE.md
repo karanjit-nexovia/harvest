@@ -1,10 +1,10 @@
-# Blindspot: architecture
+# Harvest: architecture
 
-**Blindspot finds where a deployed vision model fails, across the whole archive, and hands you the clips to fix it.**
+**Harvest finds where a deployed vision model fails, across the whole archive, and hands you the clips to fix it.**
 
 Every camera in the VAST pipeline already runs YOLO11 at ingest, and those detections sit in VastDB.
-Nobody grades them. Blindspot uses NVIDIA Cosmos3-Reason as a judge: for each sampled clip, Cosmos lists
-what is actually there (objects, counts, conditions). Blindspot compares that with what YOLO stored and reports:
+Nobody grades them. Harvest's Blindspot audit uses NVIDIA Cosmos3-Reason as a judge: for each sampled clip, Cosmos lists
+what is actually there (objects, counts, conditions). Harvest compares that with what YOLO stored and reports:
 
 - **Missed entirely**: the object is there and YOLO never names it (forklift: 0%, because COCO has no forklift class).
 - **Undercounted**: YOLO finds the object, but only part of them. `count_recall` = YOLO objects per frame ÷ Cosmos count.
@@ -13,7 +13,7 @@ what is actually there (objects, counts, conditions). Blindspot compares that wi
 - **The fix**: the failing clips go out as a retraining set (`retrain.zip`).
 
 > How this differs from the event's Video Search & Summary app: VSS helps a *person* find and describe a
-> moment. Blindspot grades the *perception model* that is already running on every camera, and turns its
+> moment. Harvest grades the *perception model* that is already running on every camera, and turns its
 > failures into training data.
 
 ```mermaid
@@ -27,7 +27,7 @@ flowchart LR
         Y["YOLO11 (COCO)<br/>ran at ingest = the model under audit"]
         CR["NVIDIA Cosmos3-Reason<br/><b>the judge</b>"]
     end
-    subgraph B["Blindspot (harvest/audit.py + Streamlit app)"]
+    subgraph B["Harvest: Blindspot audit (harvest/audit.py + Streamlit app)"]
         S["sample(): per camera,<br/>hybrid search, dedupe"]
         D["download clip"]
         I["inventory(): Cosmos lists<br/>objects · counts · conditions"]
@@ -64,7 +64,7 @@ Cosmos call per sampled clip (about 4 s each).
 
 ---
 
-# Harvest (the data-mining page): architecture
+# Second mode: Mine clips (labelled clips from a request)
 
 **Harvest turns an existing video archive into training data for AI systems** (warehouse robots,
 self-driving stacks, safety and store analytics), and proves the data is good.
