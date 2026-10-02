@@ -60,6 +60,8 @@ def run_vss(query, k, progress, camera=None):
         with open(run_dir / "clips.jsonl", "w") as fh:
             fh.writelines(json.dumps(r) + "\n" for r in records)
     stats["searched_video_s"] = round(sum(r["end"] for r in records), 1)
+    # the archive the search looked across: Cosmos ran only on the hits, not on all of it
+    stats["archive_segments"] = vss.archive_segments()
     stats["wall_s"] = round(time.time() - t0, 1)
     stats["cosmos_s"] = round(stats["cosmos_s"], 1)
     json.dump(stats, open(run_dir / "stats.json", "w"), indent=1)

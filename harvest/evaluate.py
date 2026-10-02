@@ -48,15 +48,19 @@ def score(pred, truth):
 
 def cost(stats):
     per_cosmos = stats["cosmos_s"] / max(1, stats["kept"])
-    # A = Cosmos on every search hit; on the event stack YOLO already ran at ingest, so B adds 0 for it
-    a = per_cosmos * stats["ranges"]
+    # A = Cosmos on every segment of the archive to find the same examples (the brute-force way);
+    # without an archive count, on every search hit. B = Harvest: search + reused YOLO + Cosmos on
+    # the kept hits only.
+    a = per_cosmos * (stats.get("archive_segments") or stats["ranges"])
     b = stats["yolo_s"] + stats["cosmos_s"]
     usable = max(1, stats["labelled"])
     d = config.GPU_DOLLARS_PER_HOUR / 3600
     return {"A_cosmos_everything_gpu_s": round(a, 1), "B_harvest_gpu_s": round(b, 1),
             "saving_x": round(a / b, 1) if b else None,
             "A_usd_per_usable_clip": round(a * d / usable, 4), "B_usd_per_usable_clip": round(b * d / usable, 4),
-            "video_searched_s": stats["searched_video_s"], "kept_of_ranges": f"{stats['kept']}/{stats['ranges']}"}
+            "video_searched_s": stats["searched_video_s"], "kept_of_ranges": f"{stats['kept']}/{stats['ranges']}",
+            "archive_segments": stats.get("archive_segments"),
+            "cosmos_s_per_clip": round(per_cosmos, 2)}
 
 
 def evaluate(run_dir, labels=None, use_wandb=False):

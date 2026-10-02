@@ -66,8 +66,11 @@ if page == "Harvest":
     recs, stats, ev = load(run_dir)
     if stats:
         m = st.columns(5)
-        m[0].metric("Video searched", f"{stats['searched_video_s'] / 60:.1f} min")
-        m[1].metric("Candidate ranges", stats["ranges"])
+        if stats.get("archive_segments"):
+            m[0].metric("Archive searched", f"{stats['archive_segments']:,} segments")
+        else:
+            m[0].metric("Video searched", f"{stats['searched_video_s'] / 60:.1f} min")
+        m[1].metric("VAST search hits", stats["ranges"])
         m[2].metric("YOLO kept", stats["kept"])
         m[3].metric("Cosmos labelled", stats["labelled"])
         if ev.get("cost", {}).get("saving_x"):

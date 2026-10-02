@@ -125,6 +125,15 @@ def class_counts(det):
 GPU_HOST_DEFAULT = "166.19.38.112"
 
 
+def archive_segments():
+    """How many segments the team's index holds (dashboard overview), or None."""
+    try:
+        ov = _req("GET", "/api/v1/dashboard/stats?scope=all").get("overview", {})
+        return int(ov.get("indexed_clips") or ov.get("segment_rows") or 0) or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cosmos_url():
     return env("COSMOS3_REASON_URL") or f"http://{env('GPU_HOST', GPU_HOST_DEFAULT)}:8001"
 
