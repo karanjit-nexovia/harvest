@@ -18,13 +18,13 @@ CAMERAS = {"sdg_warehouse_cam-2": "warehouse aisles, forklifts, pallets, workers
            "i24_cam-1": "highway traffic, multi-camera", "pie_cam-3": "dashcam driving in Toronto",
            "neighborhood_cam-1": "residential street, cars"}
 
-PROMPT = """You plan searches over an indexed video archive to collect robot-training examples.
+PROMPT = """You plan searches over an indexed video archive to collect training examples for a vision
+AI system (robots, autonomous vehicles, safety or retail analytics).
 Cameras: {cams}
-Action labels: {labels}
+Domains: {domains}
 Request: "{request}"
-Return ONLY JSON: {{"queries": [2-3 short visual search phrases describing the moment on camera],
- "camera_id": one camera id from the list or null, "labels": [expected labels from the list],
- "why": "<one sentence>"}}"""
+Return ONLY JSON: {{"domain": one domain key, "queries": [2-3 short visual search phrases describing the
+ moment on camera], "camera_id": one camera id from the list or null, "why": "<one sentence>"}}"""
 
 
 def model():
@@ -33,7 +33,8 @@ def model():
 
 def plan(request):
     """-> {"queries": [...], "camera_id": str|None, "labels": [...], "why": str, "planner": str}"""
-    fallback = {"queries": [request], "camera_id": None, "labels": [], "why": "planner off", "planner": "none"}
+    fallback = {"queries": [request], "camera_id": None, "domain": config.DOMAIN, "labels": [],
+                "why": "planner off", "planner": "none"}
     key = os.getenv("WANDB_API_KEY")
     if not key:
         return fallback
@@ -45,13 +46,15 @@ def plan(request):
         r = client.chat.completions.create(
             model=model(), temperature=0.2, max_tokens=300,
             messages=[{"role": "user", "content": PROMPT.format(
-                cams=json.dumps(CAMERAS), labels=", ".join(config.LABELS), request=request)}])
+                cams=json.dumps(CAMERAS), request=request,
+                domains=json.dumps({k: v["desc"] for k, v in config.DOMAINS.items()}))}])
         text = r.choices[0].message.content or ""
         data = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
         queries = [str(q) for q in data.get("queries", []) if str(q).strip()][:3] or [request]
         cam = data.get("camera_id")
-        return {"queries": queries, "camera_id": cam if cam in CAMERAS else None,
-                "labels": [l for l in data.get("labels", []) if l in config.LABELS],
+        dom = data.get("domain") if data.get("domain") in config.DOMAINS else config.DOMAIN
+        return {"queries": queries, "camera_id": cam if cam in CAMERAS else None, "domain": dom,
+                "labels": config.DOMAINS[dom]["labels"],
                 "why": str(data.get("why", "")), "planner": f"W&B Inference ({model()})"}
     except Exception as e:  # noqa: BLE001 -- never block the harvest on the planner
         return dict(fallback, why=f"planner failed: {type(e).__name__}: {str(e)[:120]}")

@@ -8,8 +8,10 @@ import streamlit as st
 st.set_page_config(page_title="Harvest", layout="wide")
 from harvest import config  # noqa: E402
 
-STEP_COLORS = {"reach": "#4C9AFF", "grasp": "#36B37E", "lift_or_pull": "#FFAB00", "move": "#6554C0",
-               "place": "#00B8D9", "conceal": "#FF5630", "release": "#8993A4", "idle": "#DFE1E6"}
+_PALETTE = ["#4C9AFF", "#36B37E", "#FFAB00", "#6554C0", "#00B8D9", "#FF5630", "#FF8B00", "#57D9A3",
+            "#998DD9", "#E774BB", "#79E2F2", "#8993A4"]
+STEP_COLORS = {s: _PALETTE[i % len(_PALETTE)] for i, s in enumerate(config.STEP_NAMES)}
+STEP_COLORS["idle"] = "#DFE1E6"
 
 
 def runs():
@@ -41,10 +43,10 @@ st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if confi
 
 if page == "Harvest":
     st.title("Harvest")
-    st.caption("Describe the skill your robot must learn. Get back segmented, labelled training clips "
-               "from your video archive.")
+    st.caption("Describe what your AI system must learn — a robot, a self-driving stack, a safety or "
+               "store-analytics model. Get back segmented, labelled training clips from your video archive.")
     c1, c2 = st.columns([4, 1])
-    request = c1.text_input("What should the robot learn?", "a robot that lifts and moves pallets in a warehouse")
+    request = c1.text_input("What should your system learn?", "a warehouse robot that lifts and moves pallets")
     k = c2.number_input("hits per query", 3, 100, 20)
     if c1.button("1 · Plan with W&B Inference"):
         from harvest import planner
@@ -57,8 +59,11 @@ if page == "Harvest":
         from harvest import planner as _pl
         cams = ["(any)"] + list(_pl.CAMERAS)
         cam = st.selectbox("Camera", cams, index=cams.index(plan["camera_id"]) if plan.get("camera_id") in cams else 0)
+        doms = list(config.DOMAINS)
+        domain = st.selectbox("Domain (label set)", doms, index=doms.index(plan.get("domain", config.DOMAIN)),
+                              format_func=lambda d: f"{d} — {config.DOMAINS[d]['desc']}")
     else:
-        queries, cam = [request], "(any)"
+        queries, cam, domain = [request], "(any)", config.DOMAIN
     with st.expander("Filter settings"):
         os.environ["HAND_ACTIVITY"] = str(st.slider("Hand activity needed (local video only)", 0.1, 1.0, 0.35, 0.05))
     if st.button("2 · Harvest", type="primary"):
@@ -72,7 +77,7 @@ if page == "Harvest":
 
         for q in [q.strip() for q in queries if q.strip()]:
             progress(f"=== {q}")
-            pipeline.run(q, k=int(k), progress=progress, camera=None if cam == "(any)" else cam)
+            pipeline.run(q, k=int(k), progress=progress, camera=None if cam == "(any)" else cam, domain=domain)
         st.rerun()
     all_runs = runs()
     if not all_runs:

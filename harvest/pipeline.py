@@ -22,7 +22,7 @@ def clip_seconds(path):
     return n / fps if n else 0.0
 
 
-def run_vss(query, k, progress, camera=None):
+def run_vss(query, k, progress, camera=None, domain=None):
     """The event stack: VAST search -> segments, YOLO detections already computed at ingest (free
     filter), download the segment, Cosmos3-Reason segments the steps."""
     from . import vss
@@ -32,7 +32,7 @@ def run_vss(query, k, progress, camera=None):
     hits = vss.search(query, top_k=k, metadata_filters={"camera_id": camera} if camera else None)
     progress(f"VAST search: {len(hits)} segments")
     need = [c.strip() for c in __import__("os").getenv("HARVEST_NEED", "person").split(",") if c.strip()]
-    stats = {"query": query, "backend": "vss", "ranges": len(hits), "kept": 0, "labelled": 0, "yolo_s": 0.0,
+    stats = {"query": query, "domain": domain or config.DOMAIN, "backend": "vss", "ranges": len(hits), "kept": 0, "labelled": 0, "yolo_s": 0.0,
              "cosmos_s": 0.0, "failed": 0, "searched_video_s": 0.0,
              "candidate_s": round(sum(h["end"] - h["start"] for h in hits), 1)}
     records = []
@@ -47,11 +47,12 @@ def run_vss(query, k, progress, camera=None):
         clip_id = f"seg{n:03d}"
         path = vss.download(h["source"], run_dir / "clips" / f"{clip_id}.mp4")
         dur = clip_seconds(path) or (h["end"] - h["start"])
-        result, secs, err = segment.segment(path, dur)
+        result, secs, err = segment.segment(path, dur, domain)
         stats["cosmos_s"] += secs
         stats["failed"] += err is not None
         stats["labelled"] += err is None and result["label"] != "other"
-        records.append({"clip_id": clip_id, "video": h["original_video"] or h["source"], "source": h["source"],
+        records.append({"clip_id": clip_id, "domain": domain or config.DOMAIN,
+                        "video": h["original_video"] or h["source"], "source": h["source"],
                         "start": 0.0, "end": round(dur, 2), "query": query, "search_score": round(h["score"], 3),
                         "camera_id": h["camera_id"], "location": h["location"], "index_caption": h["reasoning"][:400],
                         "tracks": counts, "label": result["label"], "steps": result["steps"],
@@ -71,9 +72,9 @@ def run_vss(query, k, progress, camera=None):
     return run_dir, records, stats
 
 
-def run(query, k=50, backend=None, progress=print, camera=None):
+def run(query, k=50, backend=None, progress=print, camera=None, domain=None):
     if (backend or config.SEARCH_BACKEND) == "vss":
-        return run_vss(query, k, progress, camera)
+        return run_vss(query, k, progress, camera, domain)
     run_dir = config.OUT / slug(query)
     (run_dir / "clips").mkdir(parents=True, exist_ok=True)
     t0 = time.time()
@@ -122,5 +123,6 @@ if __name__ == "__main__":
     ap.add_argument("--k", type=int, default=50)
     ap.add_argument("--backend", default=None)
     ap.add_argument("--camera", default=None, help="VSS camera_id, e.g. sdg_warehouse_cam-2")
+    ap.add_argument("--domain", default=None, choices=list(config.DOMAINS))
     a = ap.parse_args()
-    run(a.query, a.k, a.backend, camera=a.camera)
+    run(a.query, a.k, a.backend, camera=a.camera, domain=a.domain)

@@ -1,8 +1,13 @@
 # Harvest
 
-**Turn unlabeled video into systems  training data.** Ask for an action in plain English, get back
-segmented, labelled clips: semantic search → YOLO filter → NVIDIA Cosmos step segmentation →
-dataset export, with accuracy and GPU-cost numbers in Weights & Biases.
+**Turn the video archive you already have into training data for AI systems** — warehouse
+robots, self-driving stacks, safety and store analytics. Describe what your system must learn;
+Harvest finds the moments (VAST search), labels every step with timestamps (NVIDIA Cosmos3-Reason),
+proves the labels against hand labels and prices the run (Weights & Biases), exports the dataset,
+and trains a starter model on it.
+
+> VSS tells a person what happened. Harvest turns it into data a model can learn from — and proves
+> the data is good.
 
 ```
 query ─► search (VAST / CLIP / motion) ─► YOLO + pose filter (cheap, edge-able)

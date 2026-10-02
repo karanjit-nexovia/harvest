@@ -14,14 +14,18 @@ import jsonschema
 
 from . import config
 
-PROMPT = f"""You are labeling training data for warehouse robots. Watch the clip and segment the main
-person's (or forklift's) physical action into steps. Use only these step names: {", ".join(config.STEP_NAMES)}.
+def prompt(domain):
+    d = config.DOMAINS.get(domain, config.DOMAINS["warehouse"])
+    return f"""You are labeling training data for {d['desc']}. Watch the clip and segment the main
+actor's (person's or vehicle's) action into steps. Use only these step names: {", ".join(d['steps'])}.
 Return ONLY JSON, no prose:
-{{"label": one of {config.LABELS},
+{{"label": one of {d['labels']},
  "steps": [{{"name": ..., "start_s": ..., "end_s": ..., "conf": 0-1}}],
  "objects": ["..."], "notes": "<one sentence>"}}
-Times are seconds from the start of the clip. If there is no clear hand-object action, use
-label "other" and steps []."""
+Times are seconds from the start of the clip. If there is no clear action, use label "other"."""
+
+
+PROMPT = prompt(config.DOMAIN)
 
 SCHEMA = {
     "type": "object", "required": ["label", "steps"],
@@ -148,8 +152,9 @@ def _mock(path, duration):
                       for n, a, b in zip(names, cuts, cuts[1:])]}
 
 
-def segment(path, duration):
+def segment(path, duration, domain=None):
     """-> (result dict, seconds spent, error or None)"""
+    PROMPT = prompt(domain or config.DOMAIN)
     t0 = time.time()
     if config.MOCK:
         return _mock(path, duration), 0.0, None

@@ -39,7 +39,21 @@ GPU_DOLLARS_PER_HOUR = float(os.getenv("GPU_DOLLARS_PER_HOUR", "2.5"))
 
 WANDB_PROJECT = os.getenv("WANDB_PROJECT", "harvest")
 
-# Warehouse robot actions (the event's corpus: warehouse aisles, forklifts, indoor spaces)
-STEP_NAMES = ["approach", "reach", "grasp", "lift", "carry", "place", "push_or_pull", "walk", "idle"]
-LABELS = ["pick_up_object", "carry_object", "place_object", "push_or_pull_cart", "operate_forklift",
-          "walk_through", "other"]
+# Training data for any vision system: each domain has its own action labels and step vocabulary
+DOMAINS = {
+    "warehouse": {"desc": "warehouse robots and operations (workers, forklifts, pallets, carts)",
+                  "labels": ["pick_up_object", "carry_object", "place_object", "push_or_pull_cart",
+                             "operate_forklift", "walk_through", "other"],
+                  "steps": ["approach", "reach", "grasp", "lift", "carry", "place", "push_or_pull", "walk", "idle"]},
+    "traffic": {"desc": "autonomous driving and traffic systems (vehicles, intersections, highways)",
+                "labels": ["vehicle_turn", "lane_change", "vehicle_stop", "vehicle_pass", "pedestrian_crossing",
+                           "near_miss", "other"],
+                "steps": ["approach", "slow_down", "stop", "accelerate", "turn", "lane_change", "cross", "pass", "idle"]},
+    "people": {"desc": "safety and facility systems (people indoors, near vehicles or equipment)",
+               "labels": ["person_walks_through", "person_picks_up", "person_hands_over", "person_near_vehicle",
+                          "group_gathers", "fall_or_slip", "other"],
+               "steps": ["enter", "walk", "stop", "reach", "pick_up", "hand_over", "carry", "exit", "idle"]},
+}
+DOMAIN = os.getenv("HARVEST_DOMAIN", "warehouse")
+STEP_NAMES = sorted({s for d in DOMAINS.values() for s in d["steps"]})
+LABELS = sorted({l for d in DOMAINS.values() for l in d["labels"]})
