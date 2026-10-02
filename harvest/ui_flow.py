@@ -86,6 +86,8 @@ def _results(state, out):
                 + ' on ' + ", ".join(_e(_cam(c)) for c in p.get("cameras", []))
                 + f' → <b>{len(state.get("found", []))} clips</b>'
                 + (f'<br>Cosmos checks each clip against: <i>“{_e(state["request"])}”</i>' if state.get("request") else "")
+                + (f'<br><span style="color:#B45309">{len(state["skipped"])} clip(s) skipped: the VAST video server did not '
+                   'return them (replaced with spares)</span>' if state.get("skipped") else "")
                 + '</div>', unsafe_allow_html=True)
 
     _sec(3, f"Cosmos check: {len(kept)} of {len(clips)} clips kept",

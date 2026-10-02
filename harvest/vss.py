@@ -81,9 +81,23 @@ def search(query, top_k=50, min_similarity=0.3, metadata_filters=None):
     return [h for h in hits if h["source"]]
 
 
-def download(source, out_path):
-    q = urllib.parse.urlencode({"source": source, "token": token()})
-    data = _req("GET", f"/api/v1/videos/stream?{q}", auth=False, raw=True, timeout=300)
+def download(source, out_path, tries=3):
+    """Stream one segment to disk. Retries 5xx/auth failures with a fresh login (the token expires while the
+    app stays up, and the stream endpoint can answer that with a 502)."""
+    import time
+    err = None
+    for attempt in range(tries):
+        q = urllib.parse.urlencode({"source": source, "token": token(refresh=attempt > 0)})
+        try:
+            data = _req("GET", f"/api/v1/videos/stream?{q}", auth=False, raw=True, timeout=300)
+            break
+        except RuntimeError as e:
+            err = e
+            if not any(f"HTTP {c}" in str(e) for c in (401, 403, 500, 502, 503, 504)):
+                raise
+            time.sleep(1.5 * (attempt + 1))
+    else:
+        raise err
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_bytes(data)
     return out_path

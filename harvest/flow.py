@@ -129,17 +129,32 @@ def run(use_case, n=6, on_step=None, on_clip=None, spec=None):
         st["plan"]["cameras"] = list(spec["cameras"])
     st["request"] = request_text(use_case, spec)
     step("plan", st["plan"])
-    hits = find(st["plan"], n)
+    vss.token(refresh=True)   # a fresh VAST login for every run; the app may have been up for hours
+    pool_hits = find(st["plan"], n + 4)   # spares, in case a clip will not download
+    hits = pool_hits[:n]
     st["found"] = [{"source": h["source"], "camera_id": h["camera_id"], "query": h["query"],
                     "score": h.get("score")} for h in hits]
     st["archive_segments"] = vss.archive_segments()
     save()
     step("found", st["found"])
-    for i, h in enumerate(hits):
+    spares = pool_hits[n:]
+    st["skipped"] = []
+    queue, i = list(hits), 0
+    while queue:
+        h = queue.pop(0)
         cid = f"clip_{i:02d}"
+        try:
+            path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
+        except Exception as e:  # noqa: BLE001 -- one bad segment must not stop the dataset
+            st["skipped"].append({"source": h["source"], "camera_id": h["camera_id"], "error": str(e)[:160]})
+            if spares:
+                queue.append(spares.pop(0))
+            save()
+            step("skipped", st["skipped"][-1])
+            continue
+        i += 1
         det = vss.detections(h["source"])
         yolo, yolo_avg = vss.class_counts(det), vss.per_frame(det)
-        path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
         inv, secs, err = audit.inventory(path, request=st["request"])
         checks, phantoms = audit.compare(inv, yolo, yolo_avg, err)
         seen_objs = {o["name"] for o in inv["objects"]}
