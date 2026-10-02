@@ -102,8 +102,10 @@ def sample(camera, per_camera, queries, progress):
     return hits[:per_camera]
 
 
-def run(cameras, per_camera=15, queries=None, progress=print):
-    out = config.OUT / f"audit_{time.strftime('%m%d_%H%M')}"
+def run(cameras, per_camera=15, queries=None, progress=print, on_clip=None, prefix="audit"):
+    """on_clip(rec, out_dir) is called as each clip is judged (the Live test page draws it at once).
+    prefix="live" keeps quick demo runs apart from the full audits the Overview page shows."""
+    out = config.OUT / f"{prefix}_{time.strftime('%m%d_%H%M%S')}"
     (out / "clips").mkdir(parents=True, exist_ok=True)
     queries = queries or DEFAULT_QUERIES
     recs, t0, cosmos_s = [], time.time(), 0.0
@@ -140,6 +142,8 @@ def run(cameras, per_camera=15, queries=None, progress=print):
                      f"yolo misses {misses} | yolo phantoms {phantoms}{' | ERR ' + err[:60] if err else ''}")
             with open(out / "clips.jsonl", "w") as fh:
                 fh.writelines(json.dumps(r) + "\n" for r in recs)
+            if on_clip:
+                on_clip(recs[-1], out)
     rep = report(recs)
     rep["run"] = {"cameras": cameras, "clips": len(recs), "cosmos_s": round(cosmos_s, 1),
                   "wall_s": round(time.time() - t0, 1), "archive_segments": vss.archive_segments()}

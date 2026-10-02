@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Harvest", page_icon="🌾", layout="wide")
+st.set_page_config(page_title="Harvest", layout="wide")
 from harvest import config  # noqa: E402
 
 _PALETTE = ["#4C9AFF", "#36B37E", "#FFAB00", "#6554C0", "#00B8D9", "#FF5630", "#FF8B00", "#57D9A3",
@@ -16,7 +16,7 @@ STEP_COLORS["idle"] = "#DFE1E6"
 
 def runs():
     return sorted([p for p in config.OUT.glob("*") if (p / "clips.jsonl").exists()
-                   and not p.name.startswith("audit_")],
+                   and not p.name.startswith(("audit_", "live_"))],
                   key=lambda p: -p.stat().st_mtime)
 
 
@@ -39,16 +39,21 @@ def timeline(rec):
             f'<div style="font-size:12px">{legend}</div>')
 
 
-st.sidebar.markdown("<div style='font-size:26px;font-weight:800;color:#12372A;letter-spacing:-.5px'>Harvest</div>"
-                    "<div style='font-size:12.5px;color:#5B6B63;margin-bottom:14px'>Find where your vision model "
-                    "is blind. Retrain on the clips.</div>", unsafe_allow_html=True)
-page = st.sidebar.radio("Page", ["Audit", "Mine clips", "Label", "Evaluate", "Train"], label_visibility="collapsed")
-st.sidebar.caption("Mock mode (no keys)" if config.MOCK else
-                   f"Connected: VAST {config.SEARCH_BACKEND.upper()} · NVIDIA Cosmos3-Reason · W&B")
+from harvest import ui_audit  # noqa: E402
+ui_audit.sidebar_brand()
+pages = ["Overview", "Live test"]
+if st.sidebar.toggle("Research tools", value=False):
+    pages += ["Mine clips", "Label", "Evaluate", "Train"]
+page = st.sidebar.radio("Page", pages, label_visibility="collapsed")
+st.sidebar.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
+st.sidebar.caption("Demo mode (no keys)" if config.MOCK else
+                   "Connected · VAST Data · NVIDIA Cosmos3-Reason · Weights & Biases")
 
-if page == "Audit":
-    from harvest import ui_audit
-    ui_audit.page()
+if page == "Overview":
+    ui_audit.overview()
+
+elif page == "Live test":
+    ui_audit.live()
 
 elif page == "Mine clips":
     st.title("Harvest: mine clips")
