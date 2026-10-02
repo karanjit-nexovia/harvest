@@ -39,13 +39,18 @@ def timeline(rec):
             f'<div style="font-size:12px">{legend}</div>')
 
 
-from harvest import ui_audit  # noqa: E402
+from harvest import ui_audit, ui_landing  # noqa: E402
+ui_landing.gate()   # the launch page, until the visitor picks what to train
 ui_audit.sidebar_brand()
 pages = ["Build dataset", "Audit report (48 clips)"]
 # the earlier tools (Live test, Datasets, Mine clips, Label, Evaluate, Train) stay reachable with ?tools=1
 if st.query_params.get("tools") == "1":
     pages += ["Live test", "Datasets", "Mine clips", "Label", "Evaluate", "Train"]
-page = st.sidebar.radio("Page", pages, label_visibility="collapsed")
+page = st.sidebar.radio("Page", pages, label_visibility="collapsed", key="nav")
+if st.sidebar.button("← Home", use_container_width=True):
+    st.session_state["entered"] = False
+    st.session_state["seen_loader"] = True
+    st.rerun()
 st.sidebar.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.sidebar.caption("Demo mode (no keys)" if config.MOCK else
                    "Connected · VAST Data · NVIDIA Cosmos3-Reason · Weights & Biases")

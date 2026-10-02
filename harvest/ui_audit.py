@@ -27,6 +27,9 @@ header[data-testid="stHeader"] { background: transparent; }
 section[data-testid="stSidebar"] { background:#0F172A; }
 section[data-testid="stSidebar"] * { color:#CBD5E1 !important; }
 section[data-testid="stSidebar"] .hv-brand { color:#FFFFFF !important; }
+section[data-testid="stSidebar"] .stButton button { background:#1E293B !important; border:1px solid #334155 !important; }
+section[data-testid="stSidebar"] .stButton button:hover { border-color:#3B82F6 !important; }
+section[data-testid="stSidebar"] .stButton button p { color:#E2E8F0 !important; }
 .hv-brand { font-size:20px; font-weight:700; letter-spacing:-.3px; display:flex; align-items:center; gap:10px; }
 .hv-mark { width:26px; height:26px; border-radius:7px; background:linear-gradient(135deg,#3B82F6,#1D4ED8);
            display:inline-block; }

@@ -189,8 +189,13 @@ def page():
             "each one, compares it with the deployed YOLO11, and exports the fixed dataset to Weights & Biases.",
             "VAST Data · NVIDIA Cosmos<br>Weights &amp; Biases · CoreWeave")
     _sec(1, "What do you want to train?")
+    ss = st.session_state
+    # Streamlit drops a widget's value while it is off screen (e.g. on the launch page): keep a copy
+    for k, v in {"mode": "Pick a use case", "target": 6, "per_round": 15, "custom_light": "any"}.items():
+        if ss.get(k) is None:
+            ss[k] = ss.get(f"_keep_{k}", v)
     mode = st.radio("Mode", ["Pick a use case", "Describe your own training data"], horizontal=True,
-                    label_visibility="collapsed")
+                    label_visibility="collapsed", key="mode")
     spec = {}
     if mode == "Pick a use case":
         cols = st.columns(len(flow.PRESETS))
@@ -210,19 +215,24 @@ def page():
                           placeholder="e.g. A forklift reversing while a worker walks behind it in an indoor warehouse")
         from harvest import audit as _audit
         a1, a2, a3 = st.columns([2, 2, 1])
-        spec["cameras"] = a1.multiselect("Cameras (empty = Harvest chooses)", flow.ALL_CAMERAS, format_func=_cam)
+        spec["cameras"] = a1.multiselect("Cameras (empty = Harvest chooses)", flow.ALL_CAMERAS, format_func=_cam,
+                                         key="custom_cams")
         spec["must"] = a2.multiselect("Every clip must show", list(_audit.OBJECTS),
-                                      format_func=lambda o: o.replace("_", " "))
-        spec["lighting"] = a3.selectbox("Lighting", ["any"] + _audit.CONDITIONS["lighting"])
+                                      format_func=lambda o: o.replace("_", " "), key="custom_must")
+        spec["lighting"] = a3.selectbox("Lighting", ["any"] + _audit.CONDITIONS["lighting"], key="custom_light")
         st.caption("Your description searches the archive (planned by W&B Inference) and is what Cosmos checks every "
                    "clip against. Clips missing a must-show object, or in the wrong lighting, are rejected.")
     b0, t, b, c = st.columns([3.2, 1.3, 1.3, 1.4])
     b0.markdown('<div class="hv-sub" style="margin-top:30px">Harvest keeps checking new clips, round after round '
                 '(up to 4), until Cosmos has kept enough good ones.</div>', unsafe_allow_html=True)
-    target = t.number_input("Good clips needed", 1, 30, 6)
-    n = b.number_input("Clips per round", 3, 30, 15)
+    target = t.number_input("Good clips needed", 1, 30, key="target")
+    n = b.number_input("Clips per round", 3, 30, key="per_round")
     c.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
     run = c.button("Build dataset", type="primary", use_container_width=True, disabled=not (uc or "").strip())
+    for k in ("mode", "target", "per_round", "custom_light"):
+        ss[f"_keep_{k}"] = ss.get(k)
+    # arriving from the launch page: start straight away
+    run = (ss.pop("autorun", False) and bool((uc or "").strip())) or run
 
     if run:
         _stepper(0, now=0)
