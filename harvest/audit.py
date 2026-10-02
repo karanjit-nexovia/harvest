@@ -23,7 +23,7 @@ from . import config, segment, vss
 # The inventory vocabulary, and the COCO class that would cover it (None: no class in the model)
 OBJECTS = {"person": "person", "car": "car", "truck": "truck", "bus": "bus", "motorcycle": "motorcycle",
            "bicycle": "bicycle", "traffic_light": "traffic light", "forklift": None, "pallet": None,
-           "box": None, "cart": None, "shelf_rack": None, "cone": None}
+           "box": None, "cart": None, "shelf_rack": None, "cone": None, "scooter": None}
 CONDITIONS = {"lighting": ["day", "night", "backlit", "dim"], "crowding": ["empty", "sparse", "moderate", "dense"],
               "occlusion": ["low", "medium", "high"], "distance": ["near", "mid", "far"]}
 DEFAULT_QUERIES = ["people", "vehicles", "forklift", "workers in an aisle", "busy scene", "empty scene"]
@@ -42,7 +42,7 @@ Return ONLY JSON:
  "summary": "<one sentence: what is happening in the clip>",
  "events": [{{"type": one of {EVENTS}, "start_s": <seconds>, "end_s": <seconds>,
              "severity": "low|medium|high", "description": "<who did what, where>"}}]}}
-Only list an object if you are sure it is visible.
+Only list an object if you are sure it is visible. scooter = an electric or kick scooter (not a motorcycle).
 Events, in time order: close_call = a person, forklift or vehicle comes dangerously close to another without
 touching; collision = contact; unsafe_act = e.g. walking in a vehicle lane, riding forks, phone while driving;
 use normal_activity when nothing notable happens."""

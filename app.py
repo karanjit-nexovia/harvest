@@ -48,6 +48,7 @@ if st.query_params.get("tools") == "1":
     pages += ["Live test", "Datasets", "Mine clips", "Label", "Evaluate", "Train"]
 page = st.sidebar.radio("Page", pages, label_visibility="collapsed", key="nav")
 if st.sidebar.button("← Home", use_container_width=True):
+    st.query_params.clear()
     st.session_state["entered"] = False
     st.session_state["seen_loader"] = True
     st.rerun()

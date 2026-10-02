@@ -48,7 +48,7 @@ def _stepper(done, now=None):
         f'{"✓ " if i < done else ""}{_e(s)}</div>' for i, s in enumerate(STEPS)) + "</div>", unsafe_allow_html=True)
 
 
-def _card(r, out):
+def _card(r, out, review=False):
     vid = out / r["file"]
     if vid.exists():
         st.video(str(vid))
@@ -61,12 +61,26 @@ def _card(r, out):
                   for o in r["inventory"]) or '<span class="hv-chip">nothing</span>'
     yol = "".join(f'<span class="hv-chip {"ph" if y in ph else ""}">{_e(y)}</span>' for y in sorted(r["yolo"])[:8]) \
         or '<span class="hv-chip">nothing</span>'
-    pill = ('<span class="hv-pill green">✓ Kept</span>' if r["matches"] else
-            '<span class="hv-pill grey">✗ Rejected</span>')
+    removed = r.get("review") == "removed"
+    pill = ('<span class="hv-pill red">✗ Removed by you</span>' if removed else
+            '<span class="hv-pill green">✓ Kept</span>' if r["matches"] else
+            '<span class="hv-pill grey">✗ Rejected by Cosmos</span>')
+    why = ("You marked this clip as not a match. Cosmos had said: " if removed else "") + (
+        r.get("match_reason") or r.get("summary") or "")
     st.markdown(f'<div class="fl-card {"" if r["matches"] else "rej"}"><div class="t"><span>{_e(_cam(r["camera_id"]))}</span>'
-                f'{pill}</div><div class="why">{_e(r.get("match_reason") or r.get("summary") or "")}</div>'
+                f'{pill}</div><div class="why">{_e(why)}</div>'
                 f'<div class="r"><span class="k">Cosmos</span>{cos}</div>'
                 f'<div class="r"><span class="k">YOLO11</span>{yol}</div></div>', unsafe_allow_html=True)
+    if review and (r["matches"] or removed):
+        key = f"rv_{out.name}_{r['clip_id']}"
+        if removed:
+            if st.button("↺ Undo", key=key, use_container_width=True):
+                flow.review(out, r["clip_id"], "undo")
+                st.rerun()
+        elif st.button("✗ Not a match: remove", key=key, use_container_width=True,
+                       help="Take this clip out of the dataset. Harvest can then find a replacement."):
+            flow.review(out, r["clip_id"], "remove")
+            st.rerun()
 
 
 def _results(state, out):
@@ -94,18 +108,49 @@ def _results(state, out):
     _sec(3, f"Cosmos check: {len(kept)} of {len(clips)} clips kept",
          "NVIDIA Cosmos3-Reason watched every clip and kept only the ones that really show the use case."
          + (f" Target: {state['target']} good clips." if state.get("target") else ""))
-    if state.get("target") and not state.get("reached_target"):
+    cosmos_kept = sum(1 for r in clips if r.get("cosmos_matches", r["matches"]))
+    if state.get("target") and not state.get("reached_target") and cosmos_kept < state["target"]:
         why = ("the archive has no more unseen matches" if state.get("exhausted")
-               else f"stopped after {state.get('rounds')} rounds")
-        st.markdown(f'<div class="fl-box" style="border-color:#FDE68A;background:#FFFBEB">Only <b>{len(kept)}</b> of '
+               else f"stopped after {state.get('rounds')} round{'s' if state.get('rounds', 0) != 1 else ''}")
+        st.markdown(f'<div class="fl-box" style="border-color:#FDE68A;background:#FFFBEB">Only <b>{cosmos_kept}</b> of '
                     f'the {state["target"]} good clips needed: {why}. Cosmos rejected the rest as not showing '
                     f'“{_e(state.get("use_case", ""))}”. Try a broader description or other cameras.</div>',
                     unsafe_allow_html=True)
+    removed = [r for r in clips if r.get("review") == "removed"]
+    need = max(0, (state.get("target") or 0) - len(kept))
     if clips:
+        st.markdown(f'<div class="fl-box">Review the kept clips. If one is not a match, press <b>Not a match</b> and '
+                    f'it leaves the dataset. <b>{len(kept)}</b> kept'
+                    + (f' · <b style="color:#DC2626">{len(removed)}</b> removed by you' if removed else "")
+                    + (f' · <b>{need}</b> more needed for {state["target"]}' if need else " · target met")
+                    + '</div>', unsafe_allow_html=True)
+        if need and removed:
+            r1, _ = st.columns([1.4, 3])
+            with r1:
+                st.markdown('<div class="fl-indent">', unsafe_allow_html=True)
+                go = st.button(f"Find {need} replacement{'s' if need > 1 else ''}", type="primary",
+                               use_container_width=True, key=f"repl_{out.name}")
+            if go:
+                status = st.empty()
+                live = st.columns(3)
+                got = []
+
+                def on_clip(rec, o):
+                    got.append(rec)
+                    with live[(len(got) - 1) % 3]:
+                        _card(rec, o)
+                    status.markdown(f'<div class="hv-live">Cosmos checked <b>{len(got)}</b> new clips · kept '
+                                    f'<b>{sum(x["matches"] for x in got)}</b> of {need} needed</div>',
+                                    unsafe_allow_html=True)
+
+                status.markdown('<div class="hv-live">Searching the archive for clips not seen yet…</div>',
+                                unsafe_allow_html=True)
+                flow.replace(out, on_clip=on_clip)
+                st.rerun()
         cols = st.columns(3)
-        for i, r in enumerate(sorted(clips, key=lambda r: not r["matches"])):
+        for i, r in enumerate(sorted(clips, key=lambda r: (not r["matches"], r.get("review") != "removed"))):
             with cols[i % 3]:
-                _card(r, out)
+                _card(r, out, review=True)
         st.markdown('<div class="hv-sub fl-indent">Green = Cosmos saw it and YOLO11 found it · Red = YOLO11 missed it · '
                     'Amber = YOLO11 made it up</div>', unsafe_allow_html=True)
 
@@ -135,7 +180,8 @@ def _results(state, out):
 
     sug = state.get("suggestions")
     if sug:
-        _sec(5, "What Cosmos suggests changing in the model", f"Written by {_e(sug.get('by', ''))} from the comparison above.")
+        _sec(5, "What Cosmos suggests changing in the model", f"Written by {_e(sug.get('by', ''))} from the comparison above."
+             + (" Your review changed the dataset: these refresh on export or after replacements." if state.get("suggestions_stale") else ""))
         for c in sug.get("changes", []):
             st.markdown(f'<div class="fl-sug"><b>{_e(c["change"])}</b><div>{_e(c["why"])}</div></div>',
                         unsafe_allow_html=True)

@@ -23,6 +23,9 @@ PRESETS = {
                           "cameras": ["neighborhood_cam-1", "sf_streets_cam-1", "smartspace_cam-1"]},
     "Traffic analysis": {"queries": ["heavy traffic on a highway", "cars changing lanes", "trucks on the road"],
                          "cameras": ["i24_cam-1", "pie_cam-3"]},
+    "E-scooter training": {"queries": ["person riding an electric scooter", "scooter rider in a bike lane",
+                                       "scooter on the sidewalk"],
+                           "cameras": ["sf_streets_cam-1", "pie_cam-3", "neighborhood_cam-1"]},
 }
 ALL_CAMERAS = ["sdg_warehouse_cam-2", "smartspace_cam-1", "i24_cam-1", "pie_cam-3", "neighborhood_cam-1",
                "sf_streets_cam-1"]
@@ -142,33 +145,20 @@ def _check(h, cid, out, st, spec):
             "cosmos_s": round(secs, 1), "round": st["rounds"]}
 
 
-def run(use_case, n=15, on_step=None, on_clip=None, spec=None, target=6, max_rounds=4):
-    """The whole flow; writes out/flow_<time>/state.json as it goes.
-    Checks n clips per round and keeps searching deeper, round after round, until Cosmos has kept `target`
-    clips, the archive has no unseen matches left, or max_rounds is reached.
-    spec (custom requests): {"cameras": [...], "must": [objects], "lighting": "any|day|night|dim|backlit"}"""
-    step = on_step or (lambda k, msg: None)
-    spec = spec or {}
-    out = config.OUT / f"flow_{time.strftime('%m%d_%H%M%S')}"
-    (out / "clips").mkdir(parents=True, exist_ok=True)
-    st = {"use_case": use_case, "spec": spec, "started": time.time(), "clips": [], "found": [], "skipped": [],
-          "target": target, "per_round": n, "rounds": 0}
+def _save(out, st):
+    json.dump(st, open(Path(out) / "state.json", "w"), indent=1)
 
-    def save():
-        json.dump(st, open(out / "state.json", "w"), indent=1)
 
-    st["plan"] = plan(use_case)
-    if spec.get("cameras"):
-        st["plan"]["cameras"] = list(spec["cameras"])
-    st["request"] = request_text(use_case, spec)
-    step("plan", st["plan"])
-    vss.token(refresh=True)   # a fresh VAST login for every run; the app may have been up for hours
-    st["archive_segments"] = vss.archive_segments()
-    seen = set()
-    kept_n = 0
-    while kept_n < target and st["rounds"] < max_rounds:
-        st["rounds"] += 1
-        extra = [use_case] if st["rounds"] > 1 else []   # widen the search after the first round
+def _rounds(out, st, target, n, max_rounds, step, on_clip):
+    """Search -> Cosmos-check rounds until `target` clips are kept (Cosmos yes, reviewer did not remove)."""
+    spec = st.get("spec") or {}
+    seen = {f["source"] for f in st["found"]} | {s["source"] for s in st["skipped"]} | {c["source"] for c in st["clips"]}
+    kept_n = sum(1 for r in st["clips"] if r["matches"])
+    rounds = 0
+    while kept_n < target and rounds < max_rounds:
+        rounds += 1
+        st["rounds"] = st.get("rounds", 0) + 1
+        extra = [st["use_case"]] if st["rounds"] > 1 else []   # widen the search after the first round
         batch = find(st["plan"], n + 4, exclude=seen, depth=st["rounds"] - 1, extra_queries=extra)
         if not batch:
             st["exhausted"] = True
@@ -176,7 +166,7 @@ def run(use_case, n=15, on_step=None, on_clip=None, spec=None, target=6, max_rou
         seen.update(h["source"] for h in batch)
         st["found"] += [{"source": h["source"], "camera_id": h["camera_id"], "query": h["query"],
                          "score": h.get("score"), "round": st["rounds"]} for h in batch[:n]]
-        save()
+        _save(out, st)
         step("found", {"round": st["rounds"], "clips": len(batch[:n]), "kept": kept_n})
         queue, spares, checked = list(batch[:n]), list(batch[n:]), 0
         while queue and kept_n < target:
@@ -188,26 +178,84 @@ def run(use_case, n=15, on_step=None, on_clip=None, spec=None, target=6, max_rou
                 st["skipped"].append({"source": h["source"], "camera_id": h["camera_id"], "error": str(e)[:160]})
                 if spares:
                     queue.append(spares.pop(0))
-                save()
+                _save(out, st)
                 step("skipped", st["skipped"][-1])
                 continue
             checked += 1
+            rec["cosmos_matches"] = rec["matches"]
             st["clips"].append(rec)
             kept_n += rec["matches"]
-            save()
+            _save(out, st)
             if on_clip:
                 on_clip(rec, out)
         step("round_done", {"round": st["rounds"], "checked": checked, "kept": kept_n, "target": target})
     st["reached_target"] = kept_n >= target
+
+
+def _finalize(out, st, step, with_suggestions=True):
     kept = [r for r in st["clips"] if r["matches"]]
     rep = audit.report(kept) if kept else {"objects": {}, "mislabels": {}, "phantoms": []}
     st["report"] = {k: rep.get(k) for k in ("headline", "objects", "mislabels", "phantoms")}
     step("compared", st["report"])
-    st["suggestions"] = suggest(use_case, rep, kept)
+    if with_suggestions:
+        st["suggestions"] = suggest(st["use_case"], rep, kept)
+        st["suggestions_stale"] = False
     st["seconds"] = round(time.time() - st["started"], 1)
-    save()
-    step("suggested", st["suggestions"])
+    _save(out, st)
+    step("suggested", st.get("suggestions"))
+
+
+def run(use_case, n=15, on_step=None, on_clip=None, spec=None, target=6, max_rounds=4):
+    """The whole flow; writes out/flow_<time>/state.json as it goes.
+    Checks n clips per round and keeps searching deeper, round after round, until Cosmos has kept `target`
+    clips, the archive has no unseen matches left, or max_rounds is reached.
+    spec (custom requests): {"cameras": [...], "must": [objects], "lighting": "any|day|night|dim|backlit"}"""
+    step = on_step or (lambda k, msg: None)
+    spec = spec or {}
+    out = config.OUT / f"flow_{time.strftime('%m%d_%H%M%S')}"
+    (out / "clips").mkdir(parents=True, exist_ok=True)
+    st = {"use_case": use_case, "spec": spec, "started": time.time(), "clips": [], "found": [], "skipped": [],
+          "target": target, "per_round": n, "rounds": 0}
+    st["plan"] = plan(use_case)
+    if spec.get("cameras"):
+        st["plan"]["cameras"] = list(spec["cameras"])
+    st["request"] = request_text(use_case, spec)
+    step("plan", st["plan"])
+    vss.token(refresh=True)   # a fresh VAST login for every run; the app may have been up for hours
+    st["archive_segments"] = vss.archive_segments()
+    _rounds(out, st, target, n, max_rounds, step, on_clip)
+    _finalize(out, st, step)
     return out, st
+
+
+def review(out, clip_id, verdict):
+    """The reviewer overrides Cosmos on one clip: verdict "remove" (not a match) or "undo"."""
+    out = Path(out)
+    st = json.load(open(out / "state.json"))
+    for r in st["clips"]:
+        if r["clip_id"] == clip_id:
+            if verdict == "remove":
+                r["review"], r["matches"] = "removed", False
+            else:
+                r.pop("review", None)
+                r["matches"] = bool(r.get("cosmos_matches", r["matches"]))
+    st["reached_target"] = sum(1 for r in st["clips"] if r["matches"]) >= st.get("target", 0)
+    st["suggestions_stale"] = True
+    _finalize(out, st, lambda k, v: None, with_suggestions=False)
+    return st
+
+
+def replace(out, on_step=None, on_clip=None, max_rounds=3):
+    """Find replacements for removed clips: continue the search (never re-checking a clip) until the target is
+    met again, then refresh the comparison and Cosmos's suggestions."""
+    out = Path(out)
+    step = on_step or (lambda k, msg: None)
+    st = json.load(open(out / "state.json"))
+    st.pop("exhausted", None)
+    vss.token(refresh=True)
+    _rounds(out, st, st.get("target", 6), st.get("per_round", 15), max_rounds, step, on_clip)
+    _finalize(out, st, step)
+    return st
 
 
 def latest():
@@ -220,7 +268,11 @@ def export(out, wandb_log=True):
     """The fixed dataset: kept clips with Cosmos-corrected labels -> zip (+ W&B run with table + artifact)."""
     out = Path(out)
     st = json.load(open(out / "state.json"))
+    if st.get("suggestions_stale"):   # the reviewer changed the set since Cosmos last wrote its suggestions
+        _finalize(out, st, lambda k, v: None)
     kept = [r for r in st["clips"] if r["matches"]]
+    cosmos_kept = [r for r in st["clips"] if r.get("cosmos_matches", r["matches"])]
+    removed = [r for r in st["clips"] if r.get("review") == "removed"]
     slug = re.sub(r"[^a-z0-9]+", "_", st["use_case"].lower()).strip("_")[:40]
     ds = out / "dataset"
     shutil.rmtree(ds, ignore_errors=True)
@@ -237,13 +289,15 @@ def export(out, wandb_log=True):
                      # the fixed labels: what Cosmos saw, not what YOLO said
                      "objects": r["inventory"], "events": r["events"], "conditions": r["conditions"],
                      "yolo_said": sorted(r["yolo"]), "yolo_missed": [c["object"] for c in r["checks"] if not c["yolo_found"]],
-                     "yolo_made_up": r["phantoms"], "frames": frames, "labeller": "NVIDIA Cosmos3-Reason"})
+                     "yolo_made_up": r["phantoms"], "frames": frames, "labeller": "NVIDIA Cosmos3-Reason",
+                     "human_review": "approved (not removed by the reviewer)"})
     with open(ds / "annotations.jsonl", "w") as fh:
         fh.writelines(json.dumps(x) + "\n" for x in rows)
     sug = st.get("suggestions", {}).get("changes", [])
     (ds / "README.md").write_text(
-        f"# {st['use_case']}: Harvest dataset\n\n{len(rows)} clips kept by NVIDIA Cosmos3-Reason out of "
-        f"{len(st['clips'])} found in the VAST archive.\n\nLabels in `annotations.jsonl` are Cosmos's (objects, "
+        f"# {st['use_case']}: Harvest dataset\n\n{len(rows)} clips. NVIDIA Cosmos3-Reason checked "
+        f"{len(st['clips'])} clips from the VAST archive and kept {len(cosmos_kept)}; a reviewer then removed "
+        f"{len(removed)} that were not a match.\n\nLabels in `annotations.jsonl` are Cosmos's (objects, "
         "events, conditions); `yolo_missed` / `yolo_made_up` show where the deployed YOLO11 was wrong.\n\n"
         "## Suggested model changes\n" + "".join(f"- **{c['change']}**: {c['why']}\n" for c in sug))
     z = shutil.make_archive(str(out / f"{slug}_dataset"), "zip", ds)
@@ -255,12 +309,15 @@ def export(out, wandb_log=True):
                         config={"use_case": st["use_case"], "queries": st["plan"]["queries"],
                                 "cameras": st["plan"]["cameras"]})
         wb.summary.update({"clips_found": len(st["clips"]), "clips_kept": len(rows),
+                           "cosmos_kept": len(cosmos_kept), "reviewer_removed": len(removed),
+                           "cosmos_precision": round((len(cosmos_kept) - len(removed)) / max(1, len(cosmos_kept)), 3),
                            "yolo_missed_objects": sum(len(x["yolo_missed"]) for x in rows),
                            "yolo_made_up_labels": sum(len(x["yolo_made_up"]) for x in rows)})
-        t = wandb.Table(columns=["clip", "camera", "kept", "why", "cosmos_saw", "yolo_said", "yolo_missed",
+        t = wandb.Table(columns=["clip", "camera", "kept", "reviewer", "why", "cosmos_saw", "yolo_said", "yolo_missed",
                                  "yolo_made_up", "summary", "video"])
         for r in st["clips"]:
-            t.add_data(r["clip_id"], r["camera_id"], r["matches"], r["match_reason"],
+            t.add_data(r["clip_id"], r["camera_id"], r["matches"],
+                       "removed: not a match" if r.get("review") == "removed" else "",  r["match_reason"],
                        ", ".join(o["name"] for o in r["inventory"]), ", ".join(sorted(r["yolo"])),
                        ", ".join(c["object"] for c in r["checks"] if not c["yolo_found"]), ", ".join(r["phantoms"]),
                        r["summary"], wandb.Video(str(out / r["file"]), format="mp4"))

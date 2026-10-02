@@ -26,6 +26,7 @@ DESCRIPTIONS = {
     "Close call training": "A forklift, vehicle or person comes dangerously close to another. Trains near-miss alerts.",
     "Break-in training": "Someone trying doors, climbing fences or looking into windows. Trains security alerts.",
     "Traffic analysis": "Dense, merging and heavy traffic. Trains traffic analytics and driving models.",
+    "E-scooter training": "Electric scooter riders on streets and sidewalks. YOLO11 has no scooter class.",
 }
 
 
@@ -61,7 +62,9 @@ def show(skip_loader=False):
     presets = [{"name": k, "desc": DESCRIPTIONS.get(k, ""), "queries": v["queries"],
                 "cameras": [CAMERAS.get(c, c) for c in v["cameras"]]} for k, v in flow.PRESETS.items()]
     return _landing(skip_loader=skip_loader, stats=_stats(), presets=presets,
-                    objects=list(audit.OBJECTS), lighting=audit.CONDITIONS["lighting"], key="landing", default=None)
+                    objects=list(audit.OBJECTS), lighting=audit.CONDITIONS["lighting"],
+                    cameras=[{"id": c, "name": CAMERAS.get(c, c)} for c in flow.ALL_CAMERAS],
+                    key="landing", default=None)
 
 
 def apply(v):
@@ -80,6 +83,7 @@ def apply(v):
         ss["mode"] = "Describe your own training data"
         ss["custom_uc"] = v.get("text", "")
         ss["custom_must"] = [m for m in v.get("must", []) if m in audit.OBJECTS]
+        ss["custom_cams"] = [c for c in v.get("cameras", []) if c in flow.ALL_CAMERAS]
         ss["custom_light"] = v.get("lighting") if v.get("lighting") in ["any"] + audit.CONDITIONS["lighting"] else "any"
         ss["autorun"] = True
 
