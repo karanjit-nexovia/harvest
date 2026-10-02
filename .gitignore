@@ -5,3 +5,4 @@ wandb/
 *.pt
 __pycache__/
 st.log
+data/
