@@ -1,4 +1,4 @@
-"""Harvest Blindspot audit: audit the perception model the stack already runs, against the video archive.
+"""The camera audit: grade the perception model the stack already runs, against the video archive.
 
 The VAST DataEngine ran YOLO11 (COCO, 80 classes) on every segment at ingest and stored the detections.
 Nobody checks them. Harvest samples segments from each camera pack (VAST search), asks NVIDIA
@@ -18,7 +18,7 @@ import json
 import time
 from pathlib import Path
 
-from . import config, segment, vss
+from . import config, cosmos, vss
 
 # The inventory vocabulary, and the COCO class that would cover it (None: no class in the model)
 OBJECTS = {"person": "person", "car": "car", "truck": "truck", "bus": "bus", "motorcycle": "motorcycle",
@@ -117,7 +117,7 @@ def _event_type(t):
     for name, words in _EVENT_WORDS:
         if any(w in t for w in words):
             return name
-    return segment._nearest(t, EVENTS, "normal_activity")
+    return cosmos._nearest(t, EVENTS, "normal_activity")
 
 
 def _events(raw):
@@ -131,7 +131,7 @@ def _events(raw):
             a, b = 0.0, 0.0
         out.append({"type": _event_type(e.get("type", "")),
                     "start_s": round(max(0.0, a), 1), "end_s": round(max(a, b), 1),
-                    "severity": segment._nearest(e.get("severity", ""), SEVERITY, "low"),
+                    "severity": cosmos._nearest(e.get("severity", ""), SEVERITY, "low"),
                     "description": str(e.get("description", ""))[:300]})
     return sorted(out, key=lambda e: e["start_s"])
 
@@ -154,7 +154,7 @@ def inventory(path, request="", extra_objects=()):
                 "events": [{"type": "close_call", "start_s": 2.0, "end_s": 4.5, "severity": "high",
                             "description": "forklift turns into the aisle about a metre from a walking worker"}],
                 "matches": True, "match_reason": "mock: a forklift and a worker share the aisle"}, 0.0, None
-    mode = segment._MODE["input"] or "video"
+    mode = cosmos._MODE["input"] or "video"
     voc = vocab(extra_objects)
     text_prompt = PROMPT.replace(f'Objects (use only these names): {", ".join(OBJECTS)}.',
                                  f'Objects (use only these names): {", ".join(voc)}.')
@@ -166,22 +166,22 @@ def inventory(path, request="", extra_objects=()):
     if request:
         props.update(matches_request={"type": "boolean"}, match_reason={"type": "string"})
     schema = dict(SCHEMA, properties=props)
-    msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + segment._content(path, mode)}]
+    msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + cosmos._content(path, mode)}]
     err = None
     for attempt in range(2):
         try:
-            kw = dict(model=segment.model_id(), messages=msgs, temperature=0.1, max_tokens=1100)
+            kw = dict(model=cosmos.model_id(), messages=msgs, temperature=0.1, max_tokens=1100)
             try:
-                r = segment.client().chat.completions.create(**kw, extra_body={"guided_json": schema})
+                r = cosmos.client().chat.completions.create(**kw, extra_body={"guided_json": schema})
             except Exception:  # noqa: BLE001 -- no guided decoding / no video: plain call on frames
-                segment._MODE["input"] = "frames"
-                msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + segment._content(path, "frames")}]
-                r = segment.client().chat.completions.create(**dict(kw, messages=msgs))
+                cosmos._MODE["input"] = "frames"
+                msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + cosmos._content(path, "frames")}]
+                r = cosmos.client().chat.completions.create(**dict(kw, messages=msgs))
             text = r.choices[0].message.content or ""
-            data = segment._loads(re.search(r"\{.*\}", text, re.S).group(0))
+            data = cosmos._loads(re.search(r"\{.*\}", text, re.S).group(0))
             objs = []
             for o in data.get("objects") or []:
-                name = segment._nearest(o.get("name", ""), list(voc), None)
+                name = cosmos._nearest(o.get("name", ""), list(voc), None)
                 if name:
                     try:
                         cnt = int(float(o.get("count", 1) or 1))
@@ -189,7 +189,7 @@ def inventory(path, request="", extra_objects=()):
                         cnt = 1
                     objs.append({"name": name, "count": max(1, cnt), "visibility": str(o.get("visibility", ""))})
             cond = data.get("conditions") or {}
-            cond = {k: segment._nearest(cond.get(k, ""), v, v[0]) for k, v in CONDITIONS.items()}
+            cond = {k: cosmos._nearest(cond.get(k, ""), v, v[0]) for k, v in CONDITIONS.items()}
             return {"objects": objs, "conditions": cond, "notes": str(data.get("notes", "")),
                     "summary": str(data.get("summary", ""))[:300], "events": _events(data.get("events")),
                     "matches": str(data.get("matches_request", True)).lower() not in ("false", "0", "no"),
@@ -209,22 +209,6 @@ def clip_seconds(path):
         return round(n / fps, 1) if fps else None
     except Exception:  # noqa: BLE001
         return None
-
-
-def describe(out_dir, progress=print):
-    """Add Cosmos's summary + events to an existing audit's clips (detection results untouched)."""
-    out_dir = Path(out_dir)
-    recs = [json.loads(l) for l in open(out_dir / "clips.jsonl")]
-    for i, r in enumerate(recs):
-        if r.get("events"):
-            continue
-        inv, _s, err = inventory(out_dir / r["file"])
-        r["summary"], r["events"] = inv.get("summary", ""), inv.get("events", [])
-        r["duration_s"] = r.get("duration_s") or clip_seconds(out_dir / r["file"])
-        progress(f"  [{i + 1}/{len(recs)}] {r['summary'][:90] or err}")
-        with open(out_dir / "clips.jsonl", "w") as fh:
-            fh.writelines(json.dumps(x) + "\n" for x in recs)
-    return recs
 
 
 def compare(inv, yolo, yolo_avg=None, err=None, objects=None):
@@ -373,7 +357,7 @@ def log_wandb(out_dir):
     recs = [json.loads(l) for l in open(out_dir / "clips.jsonl")]
     rep = json.load(open(out_dir / "report.json"))
     wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None,
-                    name=f"blindspot-{out_dir.name}", job_type="audit", config=rep.get("run", {}))
+                    name=f"camera-audit-{out_dir.name}", job_type="audit", config=rep.get("run", {}))
     wb.summary["headline"] = rep["headline"]
     wb.log({"mislabels": wandb.Table(columns=["missed_object", "yolo_said_instead", "clips"],
                                      data=[[o, m["yolo_label"], m["clips"]] for o, ms in rep.get("mislabels", {}).items() for m in ms]),
@@ -409,7 +393,7 @@ def export_retrain(out_dir):
                 fh.write(json.dumps({"clip_id": cid, "file": r["file"], "missed_object": obj,
                                      "cosmos_inventory": r["inventory"], "conditions": r["conditions"],
                                      "camera_id": r["camera_id"], "source": r["source"]}) + "\n")
-    (ds / "README.md").write_text("# Harvest retraining set (Blindspot audit)\n\nClips where the deployed YOLO11 missed an object "
+    (ds / "README.md").write_text("# Harvest retraining set (camera audit)\n\nClips where the deployed YOLO11 missed an object "
                                   "Cosmos3-Reason saw. Weak labels: Cosmos inventory + conditions.\n\n"
                                   f"{json.dumps(rep['objects'], indent=1)}\n")
     return shutil.make_archive(str(out_dir / "retrain"), "zip", ds)

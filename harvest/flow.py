@@ -82,15 +82,15 @@ def suggest(use_case, rep, kept):
              "yolo_said_instead": rep.get("mislabels", {}), "made_up_labels": rep.get("phantoms", [])[:6]}
     if not config.MOCK:
         try:
-            from . import segment
+            from . import cosmos
             text = ("You reviewed a YOLO11 object detector (COCO classes) against what you saw in the clips of a "
                     f"training dataset. Facts: {json.dumps(facts)}\nGive 3 to 5 concrete changes that would fix "
                     "the detector for this use case (classes to add, data to label, confusions to correct, "
                     'thresholds). Return ONLY JSON: {"changes": [{"change": "<imperative, short>", '
                     '"why": "<the evidence, with numbers>"}]}')
-            r = segment.client().chat.completions.create(model=segment.model_id(), temperature=0.2, max_tokens=700,
+            r = cosmos.client().chat.completions.create(model=cosmos.model_id(), temperature=0.2, max_tokens=700,
                                                          messages=[{"role": "user", "content": text}])
-            data = segment._loads(re.search(r"\{.*\}", r.choices[0].message.content or "", re.S).group(0))
+            data = cosmos._loads(re.search(r"\{.*\}", r.choices[0].message.content or "", re.S).group(0))
             ch = [{"change": str(c.get("change", "")), "why": str(c.get("why", ""))}
                   for c in data.get("changes", []) if isinstance(c, dict) and c.get("change")]
             if ch:
@@ -268,6 +268,22 @@ def latest():
     return runs
 
 
+def _frames(src, dst_dir, stem, times):
+    """Save the frames at `times` (seconds) as JPEGs -> their paths inside the dataset."""
+    import cv2
+    cap, saved = cv2.VideoCapture(str(src)), []
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25
+    for t in times:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(t * fps))
+        ok, f = cap.read()
+        if ok:
+            name = f"{stem}_{t:05.1f}s.jpg"
+            cv2.imwrite(str(dst_dir / name), f)
+            saved.append(f"frames/{name}")
+    cap.release()
+    return saved
+
+
 def export(out, wandb_log=True):
     """The fixed dataset: kept clips with Cosmos-corrected labels -> zip (+ W&B run with table + artifact)."""
     out = Path(out)
@@ -286,8 +302,7 @@ def export(out, wandb_log=True):
     for r in kept:
         shutil.copy(out / r["file"], ds / r["file"])
         dur = r.get("duration_s") or 6
-        frames = __import__("harvest.datasets", fromlist=["_frames"])._frames(
-            out / r["file"], ds / "frames", r["clip_id"], [round(dur * f, 1) for f in (0.2, 0.5, 0.8)])
+        frames = _frames(out / r["file"], ds / "frames", r["clip_id"], [round(dur * f, 1) for f in (0.2, 0.5, 0.8)])
         rows.append({"clip": r["file"], "use_case": st["use_case"], "camera_id": r["camera_id"],
                      "source": r["source"], "summary": r["summary"], "why_it_fits": r["match_reason"],
                      # the fixed labels: what Cosmos saw, not what YOLO said

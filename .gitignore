@@ -1,8 +1,7 @@
 .venv/
 out/
+wandb/
 .env
 *.pt
 __pycache__/
-data/raw/*
-!data/raw/.gitkeep
 st.log

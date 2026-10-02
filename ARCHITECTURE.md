@@ -63,6 +63,7 @@ python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smart
 | `harvest/landing/` + `harvest/ui_landing.py` | The launch page (three.js), hands your choice to the app |
 | `harvest/flow.py` | Use case → search → Cosmos check → compare → suggestions → export |
 | `harvest/vss.py` | VAST: login, search, stream a clip, read its YOLO11 detections |
+| `harvest/cosmos.py` | The NVIDIA Cosmos3-Reason client (video, or up to 5 frames) |
 | `harvest/audit.py` | Cosmos prompt and parsing, the Cosmos-vs-YOLO11 comparison, the camera audit |
 | `harvest/planner.py` | W&B Inference search planner |
 | `harvest/ui_flow.py`, `ui_report.py`, `ui_audit.py` | The Build dataset and Audit report pages |
@@ -72,4 +73,4 @@ Run it:
 python3 -m streamlit run app.py --server.port 8501
 ```
 
-Metrics and limits: [EVALUATION.md](EVALUATION.md). Older, more detailed notes: [docs/architecture-detailed.md](docs/architecture-detailed.md).
+Metrics and limits: [EVALUATION.md](EVALUATION.md).
