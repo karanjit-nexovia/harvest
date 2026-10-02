@@ -1,74 +1,96 @@
 # How Harvest works
 
-**In one line:** Harvest checks the vision model that is already running on your cameras, finds what it
-can't see, and gives you those clips to retrain it.
+**In one line:** tell Harvest what you want your vision model to learn. It finds the clips in your video
+archive, NVIDIA Cosmos checks every one, Harvest shows where your deployed model (YOLO11) gets them wrong,
+and you get a clean, versioned training dataset in Weights & Biases.
 
 ## The picture
 
 ```mermaid
 flowchart LR
-    A["📼 VAST<br/>video archive<br/>+ YOLO11 detections"] -->|"1. sample clips"| H["🌾 Harvest"]
-    H -->|"2. what's really here?"| C["🧠 NVIDIA Cosmos3-Reason<br/>(the judge)"]
-    C -->|"forklift, person, box..."| H
-    H -->|"3. compare with YOLO11"| R["📋 Report card<br/>+ retraining clips"]
-    R -->|"4. log"| W["📈 Weights & Biases"]
+    U["👤 You<br/>'Close call training'<br/>or your own words + objects"]
+    subgraph WB1["Weights & Biases"]
+        P["W&B Inference<br/>Llama-3.1-8B<br/>plans the searches"]
+    end
+    subgraph VAST["VAST Data AI OS"]
+        S[("2,352 indexed segments<br/>VastDB: embeddings, captions,<br/>YOLO11 detections")]
+        API["VSS API<br/>/search · /videos/stream<br/>/videos/detections"]
+        S --- API
+    end
+    subgraph CW["CoreWeave GPUs"]
+        C["NVIDIA Cosmos3-Reason<br/>the judge"]
+    end
+    H["🌾 Harvest"]
+    R["You review<br/>remove wrong clips,<br/>find replacements"]
+    subgraph WB2["Weights & Biases"]
+        T["Table: every clip,<br/>Cosmos vs YOLO11, video"]
+        A["Artifact: the dataset,<br/>versioned v0, v1…"]
+    end
+    U --> H
+    H -- custom request --> P --> H
+    H -- "1 search" --> API
+    API -- "2 clips + YOLO11 detections" --> H
+    H -- "3 does this clip fit? what's in it?" --> C
+    C -- "keep / reject, objects, events" --> H
+    H -- "4 compare with YOLO11" --> R
+    R -- "5 fixed dataset" --> T
+    R --> A
 ```
 
-## The four steps
+## Which organiser tool does what
 
-| # | Step | What happens | Sponsor tool |
-|---|---|---|---|
-| 1 | **Sample** | Pull ~12 clips per camera from the archive. Each clip already has the YOLO11 detections that were saved when the video was indexed. | **VAST Data** |
-| 2 | **Judge** | Cosmos3-Reason watches each clip and lists what is really there: objects, how many, and the conditions (light, crowding, distance). | **NVIDIA Cosmos** on **CoreWeave** GPUs |
-| 3 | **Compare** | For each object Cosmos saw: did YOLO report it? For each label YOLO reported: did Cosmos see it? | Harvest |
-| 4 | **Report + fix** | Detection rate per object and camera, made-up labels, and a zip of the failing clips to retrain on. Every audit is logged. | **Weights & Biases** |
+| Tool | What it does in Harvest | Code |
+|---|---|---|
+| **VAST Data** (DataEngine + VastDB + VSS API) | Holds the archive (2,352 segments) with everything computed at ingest. Harvest **searches** it (`/api/v1/search`, filtered by camera), **streams** clips (`/api/v1/videos/stream`) and reads the **YOLO11 detections** already stored for each clip (`/api/v1/videos/detections`). | `harvest/vss.py` |
+| **NVIDIA Cosmos3-Reason** | The judge. For every clip: does it really show the use case (keep or reject, with a reason)? Which objects, how many, what conditions, what events? Then, from the comparison, it **writes the suggested model fixes**. Strict JSON output (guided decoding). | `harvest/audit.py: inventory()`, `harvest/flow.py: suggest()` |
+| **YOLO11** (run by the VAST pipeline at ingest) | The deployed model being graded. Its stored answers are compared with Cosmos's. | `harvest/audit.py: compare()` |
+| **CoreWeave** | The GPUs Cosmos3-Reason (and the ingest models) run on. | event stack |
+| **W&B Inference** | Turns a request written in your own words into VAST searches and cameras. | `harvest/planner.py` |
+| **W&B Experiments + Artifacts** | Each dataset becomes a run: a table of every clip (video, kept or removed, Cosmos vs YOLO11), the detection-rate chart, Cosmos's suggestions, Cosmos's precision after your review, and the dataset itself as a **versioned artifact** a training job pulls in one line. | `harvest/flow.py: export()` |
 
-## Example (from our real run: 48 clips, 4 cameras)
+## The flow, step by step
 
-Cosmos sees **a person and a forklift**. YOLO11 reports **person, truck, suitcase**.
-- person → found ✅
-- forklift → **missed** ❌ (YOLO's training set, COCO, has no forklift class)
-- truck, suitcase → **made up** ⚠️ (nothing in the clip explains them)
-
-Repeat over 48 clips → **forklift detected in 0 of 22 clips**, "airplane" reported on the highway in 10 of 12 clips.
-
-## Datasets: build training data for any use case
-
-The same Cosmos call also says **what is happening**: a one-line summary plus timed events
-(close call, collision, unsafe act, person–vehicle interaction, loading, congestion), each with a severity
-and a description. On the **Datasets** page you pick a use case (or type your own) and Harvest:
-
-1. finds every matching moment in the clips judged so far (or searches VAST for more),
-2. shows each clip with its event timeline,
-3. exports a dataset: `clips/`, `frames/` (start, middle and end frame of each event), `annotations.jsonl`
-   (one row per event: type, severity, start/end seconds, description, objects, conditions) and a README,
-4. optionally logs it to Weights & Biases as a versioned dataset artifact.
-
-```bash
-python3 -m harvest.datasets --describe out/audit_1002_2009   # add descriptions to an existing audit
-python3 -m harvest.datasets "Close calls" --wandb              # build the dataset
-```
+| # | Step | What happens |
+|---|---|---|
+| 1 | **Say what to train** | Pick a use case (forklift, close call, break-in, e-scooter, traffic) or describe your own, with cameras, must-show objects (including your own, like "can" or "tree") and lighting. |
+| 2 | **Find clips** | Harvest searches VAST across the chosen cameras. |
+| 3 | **Cosmos check** | Cosmos watches each clip and keeps only the ones that really match. Too few? Harvest searches deeper, round after round (up to 4), never re-checking a clip. |
+| 4 | **Compare with YOLO11** | For each object Cosmos saw: did YOLO11 report it (**missed**)? For each label YOLO11 reported: did Cosmos see it (**made up**)? |
+| 5 | **Review** | You remove any clip Cosmos got wrong; Harvest finds replacements. |
+| 6 | **Suggestions** | Cosmos writes what to change in the model, from the numbers (e.g. "add a forklift class; add hard negatives for 'truck'"). |
+| 7 | **Export** | The fixed dataset (clips, frames, `annotations.jsonl` with Cosmos's labels) goes to W&B as a versioned artifact. |
+| 8 | **Report** | Before vs after: raw search + YOLO11 labels vs the Harvest dataset, with the camera-audit baseline. |
 
 ## Why it's cheap
 
-YOLO11 already ran when the video was indexed, so Harvest just reads its answers from VAST. The only new
-GPU work is one Cosmos call per clip (about 5 seconds).
+YOLO11 already ran when the video was indexed, so Harvest reads its answers from VAST for free. The only new
+GPU work is one Cosmos call per clip (about 5 seconds), and only on clips the search already found.
+
+## Evidence at scale: the camera audit (48 clips, 4 cameras)
+
+The same check without a use case: sample every camera and grade YOLO11 on everything Cosmos sees.
+**Forklift detected in 0 of 22 clips** (reported as truck, car, suitcase); "airplane" reported on the
+I-24 highway in 10 of 12 clips; 6 object types never detected. This is where you find *what* to train.
+
+```bash
+python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
+```
 
 ## Code map
 
 | File | Does |
 |---|---|
-| `harvest/vss.py` | Talks to VAST: login, search, download a clip, read its YOLO detections |
-| `harvest/audit.py` | The audit: sample → ask Cosmos → compare → report → W&B → retraining zip |
-| `harvest/datasets.py` | Use cases → matching moments → labelled dataset (+ W&B artifact) |
-| `harvest/ui_audit.py` | The Overview, Live test and Datasets pages |
-| `app.py` | The Streamlit app (Audit page + the older clip-mining tools) |
+| `app.py` | The Streamlit app: launch page, Build dataset, Audit report |
+| `harvest/landing/` + `harvest/ui_landing.py` | The launch page (three.js), hands your choice to the app |
+| `harvest/flow.py` | Use case → search → Cosmos check → compare → suggestions → export |
+| `harvest/vss.py` | VAST: login, search, stream a clip, read its YOLO11 detections |
+| `harvest/audit.py` | Cosmos prompt and parsing, the Cosmos-vs-YOLO11 comparison, the camera audit |
+| `harvest/planner.py` | W&B Inference search planner |
+| `harvest/ui_flow.py`, `ui_report.py`, `ui_audit.py` | The Build dataset and Audit report pages |
 
 Run it:
 ```bash
-python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
 python3 -m streamlit run app.py --server.port 8501
 ```
 
-Metrics and limits: [EVALUATION.md](EVALUATION.md). Full technical detail (API endpoints, the clip-mining
-mode): [docs/architecture-detailed.md](docs/architecture-detailed.md).
+Metrics and limits: [EVALUATION.md](EVALUATION.md). Older, more detailed notes: [docs/architecture-detailed.md](docs/architecture-detailed.md).
