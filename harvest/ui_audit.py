@@ -159,11 +159,11 @@ def _run_name(p):
     return f"Audit run {t} · {n} clips"
 
 
-def overview():
+def overview(out=None):
+    """A full camera audit. `out` given: show that run (the Audit report page picks it)."""
     runs = [p for p in _runs("audit") if (p / "report.json").exists()]
     head = st.container()
-    out = None
-    if runs:
+    if out is None and runs:
         out = runs[0] if len(runs) == 1 else st.selectbox(
             "Audit run", runs, format_func=_run_name, label_visibility="collapsed")
     rep = json.load(open(out / "report.json")) if out else {}

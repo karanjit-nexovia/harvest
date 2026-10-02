@@ -42,7 +42,7 @@ def timeline(rec):
 from harvest import ui_audit, ui_landing  # noqa: E402
 ui_landing.gate()   # the launch page, until the visitor picks what to train
 ui_audit.sidebar_brand()
-pages = ["Build dataset", "Audit report (48 clips)"]
+pages = ["Build dataset", "Audit report"]
 # the earlier tools (Live test, Datasets, Mine clips, Label, Evaluate, Train) stay reachable with ?tools=1
 if st.query_params.get("tools") == "1":
     pages += ["Live test", "Datasets", "Mine clips", "Label", "Evaluate", "Train"]
@@ -60,8 +60,9 @@ if page == "Build dataset":
     from harvest import ui_flow
     ui_flow.page()
 
-elif page == "Audit report (48 clips)":
-    ui_audit.overview()
+elif page == "Audit report":
+    from harvest import ui_report
+    ui_report.page()
 
 elif page == "Live test":
     ui_audit.live()

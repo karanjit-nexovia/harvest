@@ -195,7 +195,7 @@ def _results(state, out):
              f"{len(kept)} clips, labelled by Cosmos: {n_miss} objects YOLO11 missed are added and {n_ph} labels it "
              "made up are removed. Includes clips, frames, annotations.jsonl and the suggested changes.")
         exp = state.get("export")
-        c1, c2, _ = st.columns([1.3, 1, 2])
+        c1, c2, c3, _ = st.columns([1.3, 1, 1.2, 0.8])
         with c1:
             st.markdown('<div class="fl-indent">', unsafe_allow_html=True)
             go = st.button("Export to Weights & Biases", type="primary", use_container_width=True,
@@ -208,6 +208,12 @@ def _results(state, out):
                     flow.export(out, wandb_log=False)
                     st.warning(f"W&B logging failed ({type(e).__name__}); the dataset zip is ready below.")
             st.rerun()
+        def _to_report(path=str(out)):
+            st.session_state["nav"] = "Audit report"
+            st.session_state["report_pick"] = path
+
+        c3.button("See dataset report →", key=f"rep_{out.name}", on_click=_to_report, use_container_width=True,
+                  help="Before vs after Harvest: search results + YOLO11 labels vs this dataset")
         if exp:
             c2.download_button("Download .zip", open(exp["zip"], "rb"), file_name=exp["zip"].split("/")[-1].split("\\")[-1],
                                use_container_width=True, key=f"dl_{out.name}")
