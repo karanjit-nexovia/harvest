@@ -50,4 +50,6 @@ python -m harvest.train    out/person_takes_an_item_from_a_shelf --wandb
    Cosmos (teacher) and student timelines side by side. That's "data → working model in an afternoon".
 5. Record a backup screen video.
 
+See **[EVALUATION.md](EVALUATION.md)** for inputs, outputs, metrics and how to reproduce the evaluation.
+
 Test videos in `data/raw/` are Intel IoT DevKit samples (CC BY 4.0). Use the event's videos for the demo.
