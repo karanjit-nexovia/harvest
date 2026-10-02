@@ -1,6 +1,6 @@
 # Harvest
 
-**Turn unlabeled video into robot training data.** Ask for an action in plain English, get back
+**Turn unlabeled video into systems  training data.** Ask for an action in plain English, get back
 segmented, labelled clips: semantic search → YOLO filter → NVIDIA Cosmos step segmentation →
 dataset export, with accuracy and GPU-cost numbers in Weights & Biases.
 
