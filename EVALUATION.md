@@ -3,11 +3,12 @@
 ## Sponsor tools used
 | Tool | Where |
 |---|---|
-| **VAST Data** (ingest + semantic search) | `harvest/search.py` (`SEARCH_BACKEND=vast`): natural-language query → candidate time ranges |
-| **NVIDIA Cosmos** (video reasoning) | `harvest/segment.py`: each clip → action label + timestamped steps (JSON, schema-checked) |
-| **YOLO** (detection + tracking + pose) | `harvest/detect.py`: cheap filter in front of Cosmos (person present + hands working) |
-| **Weights & Biases** | `harvest/evaluate.py`, `harvest/train.py`: accuracy, cost, clip table, confusion matrix |
-| **CoreWeave GPUs** (if used) | `YOLO_DEVICE=0` and Cosmos inference |
+| **VAST Data** (DataEngine index + VastDB + search API) | `harvest/vss.py`: login, `POST /api/v1/search`, segment stream, YOLO sidecars, archive size |
+| **NVIDIA Cosmos3-Reason** (video reasoning) | `harvest/segment.py`: each clip → action label + timestamped steps (guided JSON, schema-checked) |
+| **YOLO11** (detections, computed at ingest) | reused as the free filter in front of Cosmos (`HARVEST_NEED=person`) |
+| **W&B Inference** (serverless LLM) | `harvest/planner.py`: the robot-skill request → 2–3 search queries + camera |
+| **Weights & Biases** (experiments) | `harvest/evaluate.py`, `harvest/train.py`: accuracy, cost, clip table, confusion matrix |
+| **CoreWeave GPUs** | Cosmos3-Reason, YOLO11 and Cosmos Embed run there (the event stack) |
 
 ## Inputs
 - `data/raw/*.mp4` — the videos to mine (the event's sample videos).
@@ -45,8 +46,8 @@ python -m harvest.export   out/person_takes_an_item_from_a_shelf         # 5. da
 - `boundary_err_s` — mean |difference| of matched step start/end times, seconds.
 
 **Cost (the cascade):**
-- A = Cosmos run on every candidate range (Cosmos seconds per clip × all ranges).
-- B = YOLO on every range + Cosmos only on the kept ones (what Harvest does).
+- A = brute force: Cosmos on every segment in the archive (Cosmos seconds per clip × archive size).
+- B = Harvest: VAST search + YOLO detections already in the index + Cosmos only on the kept hits.
 - Reported as GPU seconds, `saving_x = A / B`, and $ per usable clip (`GPU_DOLLARS_PER_HOUR`).
 
 **Does the data teach?** (`harvest/train.py`)

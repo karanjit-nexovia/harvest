@@ -41,13 +41,27 @@ st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if confi
 
 if page == "Harvest":
     st.title("Harvest")
-    st.caption("Ask for an action in plain English. Get back segmented, labelled training clips.")
+    st.caption("Describe the skill your robot must learn. Get back segmented, labelled training clips "
+               "from your video archive.")
     c1, c2 = st.columns([4, 1])
-    query = c1.text_input("What do you need examples of?", "person takes an item from a shelf")
-    k = c2.number_input("max ranges", 5, 500, 50)
+    request = c1.text_input("What should the robot learn?", "a robot that lifts and moves pallets in a warehouse")
+    k = c2.number_input("hits per query", 3, 100, 20)
+    if c1.button("1 · Plan with W&B Inference"):
+        from harvest import planner
+        with st.spinner("Planning searches..."):
+            st.session_state["plan"] = planner.plan(request)
+    plan = st.session_state.get("plan")
+    if plan:
+        st.caption(f"Planner: {plan['planner']} — {plan['why']}")
+        queries = st.text_area("VAST search queries (one per line)", "\n".join(plan["queries"])).splitlines()
+        from harvest import planner as _pl
+        cams = ["(any)"] + list(_pl.CAMERAS)
+        cam = st.selectbox("Camera", cams, index=cams.index(plan["camera_id"]) if plan.get("camera_id") in cams else 0)
+    else:
+        queries, cam = [request], "(any)"
     with st.expander("Filter settings"):
-        os.environ["HAND_ACTIVITY"] = str(st.slider("Hand activity needed", 0.1, 1.0, 0.35, 0.05))
-    if st.button("Harvest", type="primary"):
+        os.environ["HAND_ACTIVITY"] = str(st.slider("Hand activity needed (local video only)", 0.1, 1.0, 0.35, 0.05))
+    if st.button("2 · Harvest", type="primary"):
         from harvest import pipeline
         box = st.empty()
         lines = []
@@ -56,7 +70,9 @@ if page == "Harvest":
             lines.append(msg)
             box.code("\n".join(lines[-12:]))
 
-        pipeline.run(query, k=int(k), progress=progress)
+        for q in [q.strip() for q in queries if q.strip()]:
+            progress(f"=== {q}")
+            pipeline.run(q, k=int(k), progress=progress, camera=None if cam == "(any)" else cam)
         st.rerun()
     all_runs = runs()
     if not all_runs:
