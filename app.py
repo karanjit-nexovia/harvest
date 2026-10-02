@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Harvest", layout="wide")
+st.set_page_config(page_title="Harvest", layout="wide", initial_sidebar_state="expanded")
 from harvest import config  # noqa: E402
 
 _PALETTE = ["#4C9AFF", "#36B37E", "#FFAB00", "#6554C0", "#00B8D9", "#FF5630", "#FF8B00", "#57D9A3",

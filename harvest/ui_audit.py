@@ -19,7 +19,10 @@ CSS = """
 html, body, [class*="css"], .stMarkdown, .stButton button, .stRadio, .stSelectbox { font-family:'Inter',sans-serif; }
 .block-container, [data-testid="stMainBlockContainer"] { padding-top: 4.2rem !important; max-width: 1240px; }
 header[data-testid="stHeader"] { background: transparent; }
-#MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"] { display:none !important; }
+#MainMenu, footer, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"], [data-testid="stDecoration"],
+[data-testid="stStatusWidget"] { display:none !important; }
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] { display:flex !important; visibility:visible !important; }
+[data-testid="stExpandSidebarButton"] svg, [data-testid="stSidebarCollapsedControl"] svg { color:#0F172A !important; fill:#0F172A; }
 section[data-testid="stSidebar"] { background:#0F172A; }
 section[data-testid="stSidebar"] * { color:#CBD5E1 !important; }
 section[data-testid="stSidebar"] .hv-brand { color:#FFFFFF !important; }
