@@ -6,8 +6,24 @@ detections the pipeline stored at ingest, and finds where the model is blind —
 and by condition (lighting, crowding, occlusion, distance). Then it hands you the failing clips as a
 retraining set, and logs the whole audit to Weights & Biases.
 
-> First finding on the event corpus: **forklifts 0% detected** — the deployed COCO model has no
-> forklift class, so every forklift in every warehouse clip is missed or called something else.
+## Results: audit of the event corpus (48 clips, 4 camera packs, 2,352 segments indexed)
+
+| Object (Cosmos saw it in) | YOLO11 detected | What YOLO reported instead, in those clips |
+|---|---|---|
+| forklift (22 clips) | **0%** | truck (14), car (11), suitcase (9), boat (7) |
+| box (12) | **0%** | car (11), truck (10), bicycle (7) |
+| cart (7) | **0%** | car (7), truck (6) |
+| pallet (6) | **0%** | car (6), truck (6) |
+| cone (4, Toronto dashcam) | **0%** | fire hydrant (2) |
+| person (36), car (24), bicycle (6) | 100% | |
+| truck (13) | 92% | |
+
+Phantoms (labels nothing in the clip explains): **"car" in 12 of 12 indoor warehouse clips**, and
+**"airplane" in 10 of 12 I-24 highway clips**. Cosmos time: 230 s for 48 clips (about 5 s each).
+W&B run: https://wandb.ai/vastdata/team-4/runs/0z157l5m
+
+The "instead" column counts labels YOLO reported in the same clips. It shows how the model reads a
+scene it has no class for; it is not a box-by-box match. The judge is Cosmos3-Reason, not hand labels.
 
 | Sponsor tool | Role |
 |---|---|
