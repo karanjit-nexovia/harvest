@@ -102,17 +102,32 @@ def suggest(use_case, rep, kept):
     return {"by": "rules (Cosmos unavailable)", "changes": ch[:5]}
 
 
-def run(use_case, n=6, on_step=None, on_clip=None):
-    """The whole flow; writes out/flow_<time>/state.json as it goes."""
+def request_text(use_case, spec):
+    """What Cosmos is asked to check each clip against."""
+    s = use_case
+    if spec.get("must"):
+        s += f". The clip must clearly show: {', '.join(m.replace('_', ' ') for m in spec['must'])}"
+    if spec.get("lighting") and spec["lighting"] != "any":
+        s += f". Lighting: {spec['lighting']}"
+    return s
+
+
+def run(use_case, n=6, on_step=None, on_clip=None, spec=None):
+    """The whole flow; writes out/flow_<time>/state.json as it goes.
+    spec (custom requests): {"cameras": [...], "must": [objects], "lighting": "any|day|night|dim|backlit"}"""
     step = on_step or (lambda k, msg: None)
+    spec = spec or {}
     out = config.OUT / f"flow_{time.strftime('%m%d_%H%M%S')}"
     (out / "clips").mkdir(parents=True, exist_ok=True)
-    st = {"use_case": use_case, "started": time.time(), "clips": []}
+    st = {"use_case": use_case, "spec": spec, "started": time.time(), "clips": []}
 
     def save():
         json.dump(st, open(out / "state.json", "w"), indent=1)
 
     st["plan"] = plan(use_case)
+    if spec.get("cameras"):
+        st["plan"]["cameras"] = list(spec["cameras"])
+    st["request"] = request_text(use_case, spec)
     step("plan", st["plan"])
     hits = find(st["plan"], n)
     st["found"] = [{"source": h["source"], "camera_id": h["camera_id"], "query": h["query"],
@@ -125,8 +140,15 @@ def run(use_case, n=6, on_step=None, on_clip=None):
         det = vss.detections(h["source"])
         yolo, yolo_avg = vss.class_counts(det), vss.per_frame(det)
         path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
-        inv, secs, err = audit.inventory(path, request=use_case)
+        inv, secs, err = audit.inventory(path, request=st["request"])
         checks, phantoms = audit.compare(inv, yolo, yolo_avg, err)
+        seen_objs = {o["name"] for o in inv["objects"]}
+        lacking = [m for m in spec.get("must", []) if m not in seen_objs]
+        light_ok = spec.get("lighting", "any") in ("any", "", None) or inv["conditions"].get("lighting") == spec["lighting"]
+        if lacking:
+            inv["matches"], inv["match_reason"] = False, f"Cosmos did not see: {', '.join(lacking)}. " + inv.get("match_reason", "")
+        elif not light_ok:
+            inv["matches"], inv["match_reason"] = False, f"lighting is {inv['conditions'].get('lighting')}, not {spec['lighting']}"
         rec = {"clip_id": cid, "camera_id": h["camera_id"], "source": h["source"], "query": h["query"],
                "file": f"clips/{cid}.mp4", "yolo": yolo, "inventory": inv["objects"],
                "conditions": inv["conditions"], "summary": inv.get("summary", ""), "events": inv.get("events", []),
@@ -211,10 +233,18 @@ def export(out, wandb_log=True):
         art = wandb.Artifact(slug or "dataset", type="dataset", description=f"{st['use_case']}: {len(rows)} clips",
                              metadata={"clips": len(rows), "use_case": st["use_case"]})
         art.add_dir(str(ds))
-        wb.log_artifact(art)
+        logged = wb.log_artifact(art)
+        where = f"{wb.entity or os.getenv('WANDB_TEAM') or 'your-team'}/{wb.project}"
+        ref = f"{where}/{art.name}:latest"
+        try:
+            logged.wait()
+            ref = f"{where}/{art.name}:{logged.version}"
+        except Exception:  # noqa: BLE001 -- offline / slow upload: :latest still resolves
+            pass
         url = wb.url
         wb.finish()
-    st["export"] = {"zip": z, "wandb_url": url, "clips": len(rows), "at": time.time()}
+    st["export"] = {"zip": z, "wandb_url": url, "clips": len(rows), "at": time.time(),
+                    "artifact": ref if wandb_log else None}
     json.dump(st, open(out / "state.json", "w"), indent=1)
     return z, url
 

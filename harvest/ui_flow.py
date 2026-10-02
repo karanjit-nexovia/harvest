@@ -84,7 +84,9 @@ def _results(state, out):
          f"{_e(p.get('by', ''))}.")
     st.markdown('<div class="fl-box">' + "".join(f'<span class="fl-q">“{_e(q)}”</span>' for q in p.get("queries", []))
                 + ' on ' + ", ".join(_e(_cam(c)) for c in p.get("cameras", []))
-                + f' → <b>{len(state.get("found", []))} clips</b></div>', unsafe_allow_html=True)
+                + f' → <b>{len(state.get("found", []))} clips</b>'
+                + (f'<br>Cosmos checks each clip against: <i>“{_e(state["request"])}”</i>' if state.get("request") else "")
+                + '</div>', unsafe_allow_html=True)
 
     _sec(3, f"Cosmos check: {len(kept)} of {len(clips)} clips kept",
          "NVIDIA Cosmos3-Reason watched every clip and kept only the ones that really show the use case.")
@@ -155,6 +157,18 @@ def _results(state, out):
                             f'{_e(exp["wandb_url"])}</a> · table of every clip (Cosmos vs YOLO11, with video), '
                             'detection-rate chart, suggested changes, and the dataset as a versioned artifact.</div>',
                             unsafe_allow_html=True)
+            if exp.get("artifact"):
+                ref = exp["artifact"]
+                st.markdown(f'<div class="fl-sec" style="margin-top:22px"><span class="fl-num">→</span>'
+                            f'<span class="fl-title">Use this dataset</span></div><div class="fl-sub">Versioned in '
+                            f'W&amp;B as <b>{_e(ref)}</b>. Every re-export of this use case becomes a new version, so '
+                            'each model can be traced to the exact clips it was trained on. Browser: run page → '
+                            'Artifacts → Files.</div>', unsafe_allow_html=True)
+                st.markdown('<div class="fl-indent">', unsafe_allow_html=True)
+                st.code(f'import wandb\nrun = wandb.init(project="{ref.split("/")[1]}", job_type="train")\n'
+                        f'data_dir = run.use_artifact("{ref}").download()\n'
+                        '# data_dir/annotations.jsonl, data_dir/clips/, data_dir/frames/', language="python")
+                st.code(f"wandb artifact get {ref}", language="bash")
 
 
 def page():
@@ -164,14 +178,34 @@ def page():
             "each one, compares it with the deployed YOLO11, and exports the fixed dataset to Weights & Biases.",
             "VAST Data · NVIDIA Cosmos<br>Weights &amp; Biases · CoreWeave")
     _sec(1, "What do you want to train?")
-    st.markdown('<div class="fl-indent">', unsafe_allow_html=True)
-    cols = st.columns(len(flow.PRESETS))
-    for c, name in zip(cols, flow.PRESETS):
-        if c.button(name, use_container_width=True):
-            st.session_state["uc"] = name
-    a, b, c = st.columns([5, 1, 1.4])
-    uc = a.text_input("Use case", key="uc", placeholder="e.g. Close call training, or 'people carrying boxes'",
-                      label_visibility="collapsed")
+    mode = st.radio("Mode", ["Pick a use case", "Describe your own training data"], horizontal=True,
+                    label_visibility="collapsed")
+    spec = {}
+    if mode == "Pick a use case":
+        cols = st.columns(len(flow.PRESETS))
+        for c, name in zip(cols, flow.PRESETS):
+            if c.button(name, use_container_width=True,
+                        type="primary" if st.session_state.get("preset") == name else "secondary"):
+                st.session_state["preset"] = name
+                st.rerun()
+        uc = st.session_state.get("preset", "")
+        if uc:
+            p = flow.PRESETS[uc]
+            st.markdown('<div class="fl-box" style="margin-left:0">Searches: ' + "".join(
+                f'<span class="fl-q">“{_e(q)}”</span>' for q in p["queries"]) + " on " +
+                ", ".join(_e(_cam(c)) for c in p["cameras"]) + "</div>", unsafe_allow_html=True)
+    else:
+        uc = st.text_area("Describe the training data you need", key="custom_uc", height=80,
+                          placeholder="e.g. A forklift reversing while a worker walks behind it in an indoor warehouse")
+        from harvest import audit as _audit
+        a1, a2, a3 = st.columns([2, 2, 1])
+        spec["cameras"] = a1.multiselect("Cameras (empty = Harvest chooses)", flow.ALL_CAMERAS, format_func=_cam)
+        spec["must"] = a2.multiselect("Every clip must show", list(_audit.OBJECTS),
+                                      format_func=lambda o: o.replace("_", " "))
+        spec["lighting"] = a3.selectbox("Lighting", ["any"] + _audit.CONDITIONS["lighting"])
+        st.caption("Your description searches the archive (planned by W&B Inference) and is what Cosmos checks every "
+                   "clip against. Clips missing a must-show object, or in the wrong lighting, are rejected.")
+    b0, b, c = st.columns([5, 1, 1.4])
     n = b.number_input("Clips", 2, 15, 6, label_visibility="collapsed")
     run = c.button("Build dataset", type="primary", use_container_width=True, disabled=not (uc or "").strip())
 
@@ -197,7 +231,7 @@ def page():
                 _card(rec, out)
             status.markdown(f'<div class="hv-live">Cosmos checked <b>{len(seen)}</b> clips…</div>', unsafe_allow_html=True)
 
-        out, _ = flow.run(uc.strip(), int(n), on_step=on_step, on_clip=on_clip)
+        out, _ = flow.run(uc.strip(), int(n), on_step=on_step, on_clip=on_clip, spec=spec)
         st.session_state["flow_dir"] = str(out)
         st.rerun()
 

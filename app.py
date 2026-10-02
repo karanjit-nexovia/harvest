@@ -41,8 +41,9 @@ def timeline(rec):
 
 from harvest import ui_audit  # noqa: E402
 ui_audit.sidebar_brand()
-pages = ["Build dataset", "Model audit"]
-if st.sidebar.toggle("Research tools", value=False):
+pages = ["Build dataset", "Audit report (48 clips)"]
+# the earlier tools (Live test, Datasets, Mine clips, Label, Evaluate, Train) stay reachable with ?tools=1
+if st.query_params.get("tools") == "1":
     pages += ["Live test", "Datasets", "Mine clips", "Label", "Evaluate", "Train"]
 page = st.sidebar.radio("Page", pages, label_visibility="collapsed")
 st.sidebar.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
@@ -53,7 +54,7 @@ if page == "Build dataset":
     from harvest import ui_flow
     ui_flow.page()
 
-elif page == "Model audit":
+elif page == "Audit report (48 clips)":
     ui_audit.overview()
 
 elif page == "Live test":
