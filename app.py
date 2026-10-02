@@ -16,7 +16,7 @@ STEP_COLORS["idle"] = "#DFE1E6"
 
 def runs():
     return sorted([p for p in config.OUT.glob("*") if (p / "clips.jsonl").exists()
-                   and not p.name.startswith(("audit_", "live_"))],
+                   and not p.name.startswith(("audit_", "live_", "ds_")) and p.name != "datasets"],
                   key=lambda p: -p.stat().st_mtime)
 
 
@@ -41,7 +41,7 @@ def timeline(rec):
 
 from harvest import ui_audit  # noqa: E402
 ui_audit.sidebar_brand()
-pages = ["Overview", "Live test"]
+pages = ["Overview", "Live test", "Datasets"]
 if st.sidebar.toggle("Research tools", value=False):
     pages += ["Mine clips", "Label", "Evaluate", "Train"]
 page = st.sidebar.radio("Page", pages, label_visibility="collapsed")
@@ -54,6 +54,9 @@ if page == "Overview":
 
 elif page == "Live test":
     ui_audit.live()
+
+elif page == "Datasets":
+    ui_audit.datasets()
 
 elif page == "Mine clips":
     st.title("Harvest: mine clips")

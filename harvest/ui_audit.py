@@ -1,6 +1,7 @@
 """Harvest UI: the Overview page (one audit run) and the Live test page (judge a few clips on stage)."""
 import html
 import json
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -137,7 +138,8 @@ def _clip_card(r, out):
         verdict = f'<span class="hv-pill amber">{len(ph)} made up</span>'
     else:
         verdict = '<span class="hv-pill green">correct</span>'
-    st.markdown(f'<div class="hv-clip"><div class="t"><span>{_e(_cam(r["camera_id"]))}</span>{verdict}</div>'
+    summ = f'<div class="r" style="color:#334155;margin-bottom:4px">{_e(r["summary"])}</div>' if r.get("summary") else ""
+    st.markdown(f'<div class="hv-clip"><div class="t"><span>{_e(_cam(r["camera_id"]))}</span>{verdict}</div>{summ}'
                 f'<div class="r"><span class="k">Cosmos</span>{cos}</div>'
                 f'<div class="r"><span class="k">YOLO11</span>{yol}</div></div>', unsafe_allow_html=True)
 
@@ -181,7 +183,7 @@ def overview():
         return
     recs = [json.loads(l) for l in open(out / "clips.jsonl")]
     ok = [r for r in recs if not r.get("error")]
-    objs = rep["objects"]
+    objs = rep.get("objects", {})
     blind = [o for o, v in objs.items() if (v["rate"] or 0) == 0 and v["seen"] >= 2]
     ph_clips = sum(1 for r in ok if r.get("phantoms"))
     fails = [r for r in ok if any(not c["yolo_found"] for c in r["checks"])]
@@ -229,7 +231,7 @@ def overview():
     st.markdown('<div class="hv-h2">Breakdown</div>', unsafe_allow_html=True)
     t1, t2, t3 = st.tabs(["By camera", "By condition", "Report JSON"])
     with t1:
-        bc = pd.DataFrame(rep["by_camera"])
+        bc = pd.DataFrame(rep.get("by_camera", []))
         if not bc.empty:
             import altair as alt
             bc["camera"] = bc["camera"].map(_cam)
@@ -245,7 +247,7 @@ def overview():
             st.altair_chart((heat + text).properties(height=max(240, 32 * bc["object"].nunique()))
                             .configure_view(strokeWidth=0), use_container_width=True)
     with t2:
-        cond = pd.DataFrame(rep["by_condition"])
+        cond = pd.DataFrame(rep.get("by_condition", []))
         if not cond.empty:
             cond = cond[["object", "condition", "value", "detected", "seen", "rate"]].copy()
             cond["rate"] = (cond["rate"].fillna(0) * 100).round().astype(int).astype(str) + "%"
@@ -318,3 +320,103 @@ def live():
             for i, r in enumerate(recs):
                 with cols[i % 3]:
                     _clip_card(r, last[0])
+
+
+EVENT_COLORS = {"close_call": "#DC2626", "collision": "#7F1D1D", "unsafe_act": "#D97706",
+                "person_vehicle_interaction": "#2563EB", "vehicle_interaction": "#0891B2",
+                "loading_unloading": "#7C3AED", "congestion": "#64748B", "normal_activity": "#CBD5E1"}
+
+
+def _timeline(r, events):
+    dur = r.get("duration_s") or max([e["end_s"] for e in r.get("events", [])] + [1])
+    bars = "".join(
+        f'<div title="{_e(e["type"])} {e["start_s"]}-{e["end_s"]}s" style="position:absolute;top:0;bottom:0;'
+        f'left:{min(98, 100 * e["start_s"] / dur):.1f}%;width:{max(2, 100 * (e["end_s"] - e["start_s"]) / dur):.1f}%;'
+        f'background:{EVENT_COLORS.get(e["type"], "#94A3B8")};border-radius:3px"></div>' for e in events)
+    rows = "".join(
+        f'<div class="r"><span class="hv-pill" style="background:{EVENT_COLORS.get(e["type"], "#94A3B8")}1A;'
+        f'color:{EVENT_COLORS.get(e["type"], "#334155")}">{_e(e["type"].replace("_", " "))} · {_e(e["severity"])}</span> '
+        f'<span style="color:#64748B">{e["start_s"]:.0f}–{e["end_s"]:.0f}s</span> {_e(e.get("description", ""))}</div>'
+        for e in events)
+    return (f'<div style="position:relative;height:10px;background:#F1F5F9;border-radius:3px;margin:6px 0 4px">'
+            f'{bars}</div>{rows}')
+
+
+def datasets():
+    from harvest import datasets as dsets
+    _header("Datasets", "Pick what you want to train on. Cosmos3-Reason has described what happens in every clip; "
+            "Harvest finds the matching moments and exports them as a labelled dataset.",
+            "Labels by <b>NVIDIA Cosmos3-Reason</b><br>Source <b>VAST archive</b><br>Logged to <b>W&amp;B</b>")
+    names = list(dsets.USE_CASES) + ["Custom"]
+    uc = st.radio("Use case", names, horizontal=True, label_visibility="collapsed")
+    if uc == "Custom":
+        text = st.text_input("Describe the moments you want", "forklift reversing near a worker")
+        types, desc = [], f'Events whose description mentions: "{text}"'
+    else:
+        text, types, desc = "", dsets.USE_CASES[uc]["types"], dsets.USE_CASES[uc]["desc"]
+    c1, c2 = st.columns([3, 1])
+    c1.markdown(f'<div class="hv-sub" style="margin-top:6px">{_e(desc)}</div>', unsafe_allow_html=True)
+    sev = c2.select_slider("Minimum severity", ["low", "medium", "high"], "low")
+
+    with st.expander("Find more clips in the archive"):
+        d1, d2, d3 = st.columns([4, 1, 1.3])
+        default = dsets.USE_CASES.get(uc, {}).get("cameras", list(CAMERAS)[:2])
+        cams = d1.multiselect("Cameras", list(CAMERAS), default, format_func=_cam)
+        per = d2.number_input("Clips each", 1, 10, 3)
+        d3.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
+        if d3.button("Search + describe", use_container_width=True):
+            status = st.empty()
+            done = []
+
+            def on_clip(rec, out):
+                done.append(rec)
+                status.markdown(f'<div class="hv-live">Described {len(done)} of {len(cams) * per}: '
+                                f'{_e(rec.get("summary", "")[:140])}</div>', unsafe_allow_html=True)
+
+            dsets.collect(uc, int(per), cams, on_clip, query=text or None)
+            st.rerun()
+
+    allrecs = dsets.pool()
+    m = dsets.match(allrecs, types, text, sev)
+    n_ev = sum(len(ev) for _, ev in m)
+    kpis = [("Clips described", f"{len(allrecs)}", ""), ("Matching clips", f"{len(m)}", ""),
+            ("Labelled events", f"{n_ev}", ""), ("Cameras", f"{len({r['camera_id'] for r, _ in m})}", ""),
+            ("High severity", f"{sum(1 for _, ev in m for e in ev if e['severity'] == 'high')}", "bad")]
+    st.markdown('<div class="hv-kpis">' + "".join(
+        f'<div class="hv-kpi"><div class="l">{_e(l)}</div><div class="v {c}">{_e(v)}</div></div>'
+        for l, v, c in kpis) + "</div>", unsafe_allow_html=True)
+    if not allrecs:
+        st.info("No clip has a Cosmos description yet. Use 'Find more clips in the archive' above, or run "
+                "python3 -m harvest.datasets --describe out/<audit dir> on the VM.")
+        return
+    if not m:
+        st.info("No matching moments yet. Try a lower severity, another use case, or find more clips above.")
+        return
+    b1, b2, _ = st.columns([1.2, 1.2, 2])
+    if b1.button(f"Build dataset · {n_ev} events", type="primary", use_container_width=True):
+        with st.spinner("Copying clips, extracting frames, writing labels..."):
+            ds, z, rows = dsets.build(uc if uc != "Custom" else text, m)
+        st.session_state["ds_zip"] = (str(z), ds.name, len(rows))
+    if b2.button("Build + log to W&B", use_container_width=True):
+        with st.spinner("Building and logging the dataset artifact to W&B..."):
+            ds, z, rows = dsets.build(uc if uc != "Custom" else text, m, wandb_log=True)
+        st.session_state["ds_zip"] = (str(z), ds.name, len(rows))
+    if st.session_state.get("ds_zip"):
+        z, nm, nrows = st.session_state["ds_zip"]
+        st.success(f"Dataset {nm}: {nrows} labelled events · clips, frames, annotations.jsonl, README")
+        st.download_button("Download dataset (.zip)", open(z, "rb"), file_name=f"{nm}.zip")
+
+    st.markdown('<div class="hv-h2">Matching moments</div><div class="hv-sub">Each clip with what Cosmos3-Reason '
+                'says happens, and when. These rows become annotations.jsonl.</div>', unsafe_allow_html=True)
+    cols = st.columns(3)
+    for i, (r, ev) in enumerate(m[:12]):
+        with cols[i % 3]:
+            vid = Path(r["_dir"]) / r["file"]
+            if vid.exists():
+                st.video(str(vid))
+                st.markdown('<div style="height:16px"></div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="hv-noclip">video stored on the VM</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="hv-clip"><div class="t"><span>{_e(_cam(r["camera_id"]))}</span></div>'
+                        f'<div class="r" style="color:#334155">{_e(r.get("summary", ""))}</div>'
+                        f'{_timeline(r, ev)}</div>', unsafe_allow_html=True)

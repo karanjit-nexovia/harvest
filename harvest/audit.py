@@ -27,6 +27,10 @@ OBJECTS = {"person": "person", "car": "car", "truck": "truck", "bus": "bus", "mo
 CONDITIONS = {"lighting": ["day", "night", "backlit", "dim"], "crowding": ["empty", "sparse", "moderate", "dense"],
               "occlusion": ["low", "medium", "high"], "distance": ["near", "mid", "far"]}
 DEFAULT_QUERIES = ["people", "vehicles", "forklift", "workers in an aisle", "busy scene", "empty scene"]
+# What Cosmos says is happening: the vocabulary use-case datasets are built from
+EVENTS = ["close_call", "collision", "unsafe_act", "person_vehicle_interaction", "vehicle_interaction",
+          "loading_unloading", "congestion", "normal_activity"]
+SEVERITY = ["low", "medium", "high"]
 
 PROMPT = f"""You are auditing an object detector. Watch the clip and list, strictly, what is visible.
 Objects (use only these names): {", ".join(OBJECTS)}.
@@ -34,14 +38,60 @@ Return ONLY JSON:
 {{"objects": [{{"name": ..., "count": <how many are typically visible at the same time>, "visibility": "clear|partial|tiny"}}],
  "conditions": {{"lighting": one of {CONDITIONS['lighting']}, "crowding": one of {CONDITIONS['crowding']},
                 "occlusion": one of {CONDITIONS['occlusion']}, "distance": one of {CONDITIONS['distance']}}},
- "notes": "<one sentence on what is hard to see in this clip>"}}
-Only list an object if you are sure it is visible."""
+ "notes": "<one sentence on what is hard to see in this clip>",
+ "summary": "<one sentence: what is happening in the clip>",
+ "events": [{{"type": one of {EVENTS}, "start_s": <seconds>, "end_s": <seconds>,
+             "severity": "low|medium|high", "description": "<who did what, where>"}}]}}
+Only list an object if you are sure it is visible.
+Events, in time order: close_call = a person, forklift or vehicle comes dangerously close to another without
+touching; collision = contact; unsafe_act = e.g. walking in a vehicle lane, riding forks, phone while driving;
+use normal_activity when nothing notable happens."""
 
 SCHEMA = {"type": "object", "required": ["objects", "conditions"],
           "properties": {"objects": {"type": "array", "items": {"type": "object", "required": ["name"],
                                      "properties": {"name": {"enum": list(OBJECTS)}, "count": {"type": "number"},
                                                     "visibility": {"type": "string"}}}},
-                         "conditions": {"type": "object"}, "notes": {"type": "string"}}}
+                         "conditions": {"type": "object"}, "notes": {"type": "string"},
+                         "summary": {"type": "string"},
+                         "events": {"type": "array", "items": {"type": "object", "required": ["type"],
+                                    "properties": {"type": {"enum": EVENTS}, "start_s": {"type": "number"},
+                                                   "end_s": {"type": "number"}, "severity": {"enum": SEVERITY},
+                                                   "description": {"type": "string"}}}}}}
+
+
+_EVENT_WORDS = [("collision", ("collid", "collision", "crash", "contact", "hit")),
+                ("close_call", ("near", "miss", "close", "almost")),
+                ("unsafe_act", ("unsafe", "violation", "danger", "phone", "riding")),
+                ("loading_unloading", ("load", "pallet", "lift")),
+                ("congestion", ("congest", "traffic jam", "queue", "jam")),
+                ("person_vehicle_interaction", ("pedestrian", "person_vehicle", "crossing")),
+                ("vehicle_interaction", ("merge", "lane", "overtak", "vehicle_interaction"))]
+
+
+def _event_type(t):
+    t = str(t).lower().strip()
+    if t in EVENTS:
+        return t
+    for name, words in _EVENT_WORDS:
+        if any(w in t for w in words):
+            return name
+    return segment._nearest(t, EVENTS, "normal_activity")
+
+
+def _events(raw):
+    out = []
+    for e in raw or []:
+        if not isinstance(e, dict):
+            continue
+        try:
+            a, b = float(e.get("start_s") or 0), float(e.get("end_s") or 0)
+        except (TypeError, ValueError):
+            a, b = 0.0, 0.0
+        out.append({"type": _event_type(e.get("type", "")),
+                    "start_s": round(max(0.0, a), 1), "end_s": round(max(a, b), 1),
+                    "severity": segment._nearest(e.get("severity", ""), SEVERITY, "low"),
+                    "description": str(e.get("description", ""))[:300]})
+    return sorted(out, key=lambda e: e["start_s"])
 
 
 def inventory(path):
@@ -52,13 +102,15 @@ def inventory(path):
         return {"objects": [{"name": "person", "count": 2, "visibility": "clear"},
                             {"name": "forklift", "count": 1, "visibility": "clear"}],
                 "conditions": {"lighting": "dim", "crowding": "sparse", "occlusion": "low", "distance": "mid"},
-                "notes": "mock"}, 0.0, None
+                "notes": "mock", "summary": "A worker walks an aisle as a forklift turns in front of them.",
+                "events": [{"type": "close_call", "start_s": 2.0, "end_s": 4.5, "severity": "high",
+                            "description": "forklift turns into the aisle about a metre from a walking worker"}]}, 0.0, None
     mode = segment._MODE["input"] or "video"
     msgs = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + segment._content(path, mode)}]
     err = None
     for attempt in range(2):
         try:
-            kw = dict(model=segment.model_id(), messages=msgs, temperature=0.1, max_tokens=600)
+            kw = dict(model=segment.model_id(), messages=msgs, temperature=0.1, max_tokens=1100)
             try:
                 r = segment.client().chat.completions.create(**kw, extra_body={"guided_json": SCHEMA})
             except Exception:  # noqa: BLE001 -- no guided decoding / no video: plain call on frames
@@ -78,10 +130,39 @@ def inventory(path):
                     objs.append({"name": name, "count": max(1, cnt), "visibility": str(o.get("visibility", ""))})
             cond = data.get("conditions") or {}
             cond = {k: segment._nearest(cond.get(k, ""), v, v[0]) for k, v in CONDITIONS.items()}
-            return {"objects": objs, "conditions": cond, "notes": str(data.get("notes", ""))}, time.time() - t0, None
+            return {"objects": objs, "conditions": cond, "notes": str(data.get("notes", "")),
+                    "summary": str(data.get("summary", ""))[:300], "events": _events(data.get("events"))}, \
+                time.time() - t0, None
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"[:300]
-    return {"objects": [], "conditions": {}, "notes": ""}, time.time() - t0, err
+    return {"objects": [], "conditions": {}, "notes": "", "summary": "", "events": []}, time.time() - t0, err
+
+
+def clip_seconds(path):
+    try:
+        import cv2
+        cap = cv2.VideoCapture(str(path))
+        n, fps = cap.get(cv2.CAP_PROP_FRAME_COUNT), cap.get(cv2.CAP_PROP_FPS) or 0
+        cap.release()
+        return round(n / fps, 1) if fps else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def describe(out_dir, progress=print):
+    """Add Cosmos's summary + events to an existing audit's clips (detection results untouched)."""
+    out_dir = Path(out_dir)
+    recs = [json.loads(l) for l in open(out_dir / "clips.jsonl")]
+    for i, r in enumerate(recs):
+        if r.get("events"):
+            continue
+        inv, _s, err = inventory(out_dir / r["file"])
+        r["summary"], r["events"] = inv.get("summary", ""), inv.get("events", [])
+        r["duration_s"] = r.get("duration_s") or clip_seconds(out_dir / r["file"])
+        progress(f"  [{i + 1}/{len(recs)}] {r['summary'][:90] or err}")
+        with open(out_dir / "clips.jsonl", "w") as fh:
+            fh.writelines(json.dumps(x) + "\n" for x in recs)
+    return recs
 
 
 def yolo_classes(counts):
@@ -135,7 +216,8 @@ def run(cameras, per_camera=15, queries=None, progress=print, on_clip=None, pref
             phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
             recs.append({"clip_id": cid, "camera_id": cam, "source": h["source"], "file": f"clips/{cid}.mp4",
                          "yolo": yolo, "yolo_avg": yolo_avg, "inventory": inv["objects"], "conditions": inv["conditions"],
-                         "notes": inv["notes"], "checks": checks, "phantoms": phantoms, "error": err,
+                         "notes": inv["notes"], "summary": inv.get("summary", ""), "events": inv.get("events", []),
+                         "duration_s": clip_seconds(path), "checks": checks, "phantoms": phantoms, "error": err,
                          "cosmos_s": round(secs, 2)})
             misses = [c["object"] for c in checks if not c["yolo_found"]]
             progress(f"  [{n + 1}/{len(hits)}] cosmos sees {[o['name'] for o in inv['objects']]} | "
