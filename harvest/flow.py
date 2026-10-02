@@ -118,6 +118,8 @@ def request_text(use_case, spec):
     s = use_case
     if spec.get("must"):
         s += f". The clip must clearly show: {', '.join(m.replace('_', ' ') for m in spec['must'])}"
+    if spec.get("objects"):
+        s += f". Also look for: {', '.join(o.replace('_', ' ') for o in spec['objects'])}"
     if spec.get("lighting") and spec["lighting"] != "any":
         s += f". Lighting: {spec['lighting']}"
     return s
@@ -128,8 +130,9 @@ def _check(h, cid, out, st, spec):
     path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
     det = vss.detections(h["source"])
     yolo, yolo_avg = vss.class_counts(det), vss.per_frame(det)
-    inv, secs, err = audit.inventory(path, request=st["request"])
-    checks, phantoms = audit.compare(inv, yolo, yolo_avg, err)
+    extra = spec.get("objects") or []
+    inv, secs, err = audit.inventory(path, request=st["request"], extra_objects=extra)
+    checks, phantoms = audit.compare(inv, yolo, yolo_avg, err, objects=audit.vocab(extra))
     seen_objs = {o["name"] for o in inv["objects"]}
     lacking = [m for m in spec.get("must", []) if m not in seen_objs]
     light_ok = spec.get("lighting", "any") in ("any", "", None) or inv["conditions"].get("lighting") == spec["lighting"]
@@ -194,7 +197,8 @@ def _rounds(out, st, target, n, max_rounds, step, on_clip):
 
 def _finalize(out, st, step, with_suggestions=True):
     kept = [r for r in st["clips"] if r["matches"]]
-    rep = audit.report(kept) if kept else {"objects": {}, "mislabels": {}, "phantoms": []}
+    rep = audit.report(kept, audit.vocab((st.get("spec") or {}).get("objects"))) if kept else \
+        {"objects": {}, "mislabels": {}, "phantoms": []}
     st["report"] = {k: rep.get(k) for k in ("headline", "objects", "mislabels", "phantoms")}
     step("compared", st["report"])
     if with_suggestions:

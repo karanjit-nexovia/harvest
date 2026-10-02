@@ -82,7 +82,9 @@ def apply(v):
     elif v.get("action") == "describe":
         ss["mode"] = "Describe your own training data"
         ss["custom_uc"] = v.get("text", "")
-        ss["custom_must"] = [m for m in v.get("must", []) if m in audit.OBJECTS]
+        own = [k for k in (audit.object_key(o) for o in v.get("objects", [])) if k and k not in audit.OBJECTS]
+        ss["custom_objs"] = ss["_keep_custom_objs"] = ", ".join(o.replace("_", " ") for o in own)
+        ss["custom_must"] = [m for m in (audit.object_key(x) for x in v.get("must", [])) if m in audit.OBJECTS or m in own]
         ss["custom_cams"] = [c for c in v.get("cameras", []) if c in flow.ALL_CAMERAS]
         ss["custom_light"] = v.get("lighting") if v.get("lighting") in ["any"] + audit.CONDITIONS["lighting"] else "any"
         ss["autorun"] = True

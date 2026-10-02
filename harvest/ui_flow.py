@@ -101,6 +101,8 @@ def _results(state, out):
                 + f' → <b>{len(state.get("found", []))} clips</b>'
                 + (f' over <b>{state["rounds"]} rounds</b>' if state.get("rounds", 1) > 1 else "")
                 + (f'<br>Cosmos checks each clip against: <i>“{_e(state["request"])}”</i>' if state.get("request") else "")
+                + ('<br>Your own objects: ' + "".join(f'<span class="fl-q">{_e(o.replace("_", " "))}</span>'
+                   for o in (state.get("spec") or {}).get("objects", [])) if (state.get("spec") or {}).get("objects") else "")
                 + (f'<br><span style="color:#B45309">{len(state["skipped"])} clip(s) skipped: the VAST video server did not '
                    'return them (replaced with spares)</span>' if state.get("skipped") else "")
                 + '</div>', unsafe_allow_html=True)
@@ -237,12 +239,23 @@ def page():
     _sec(1, "What do you want to train?")
     ss = st.session_state
     # Streamlit drops a widget's value while it is off screen (e.g. on the launch page): keep a copy
-    for k, v in {"mode": "Pick a use case", "target": 6, "per_round": 15, "custom_light": "any"}.items():
+    for k, v in {"mode": "Pick a use case", "target": 6, "per_round": 15, "custom_light": "any",
+                 "custom_objs": ""}.items():
         if ss.get(k) is None:
             ss[k] = ss.get(f"_keep_{k}", v)
     mode = st.radio("Mode", ["Pick a use case", "Describe your own training data"], horizontal=True,
                     label_visibility="collapsed", key="mode")
     spec = {}
+    from harvest import audit as _audit
+    extra_txt = st.text_input("Also have Cosmos look for (your own objects, comma-separated)", key="custom_objs",
+                              placeholder="e.g. can, tree, fire extinguisher, ladder")
+    extra = [k for k in dict.fromkeys(_audit.object_key(x) for x in extra_txt.split(",")) if k and k not in _audit.OBJECTS]
+    if extra:
+        spec["objects"] = extra
+        st.markdown('<div class="hv-sub" style="margin:-6px 0 10px">' + " ".join(
+            f'<span class="hv-pill {"green" if _audit.coco_for(k) else "red"}">{_e(k.replace("_", " "))}: '
+            f'{"YOLO11 class " + _e(_audit.coco_for(k)) if _audit.coco_for(k) else "not in YOLO11"}</span>' for k in extra)
+            + '</div>', unsafe_allow_html=True)
     if mode == "Pick a use case":
         cols = st.columns(len(flow.PRESETS))
         for c, name in zip(cols, flow.PRESETS):
@@ -259,11 +272,12 @@ def page():
     else:
         uc = st.text_area("Describe the training data you need", key="custom_uc", height=80,
                           placeholder="e.g. A forklift reversing while a worker walks behind it in an indoor warehouse")
-        from harvest import audit as _audit
         a1, a2, a3 = st.columns([2, 2, 1])
+        must_opts = list(_audit.OBJECTS) + extra
+        ss["custom_must"] = [m for m in (ss.get("custom_must") or []) if m in must_opts]
         spec["cameras"] = a1.multiselect("Cameras (empty = Harvest chooses)", flow.ALL_CAMERAS, format_func=_cam,
                                          key="custom_cams")
-        spec["must"] = a2.multiselect("Every clip must show", list(_audit.OBJECTS),
+        spec["must"] = a2.multiselect("Every clip must show", must_opts,
                                       format_func=lambda o: o.replace("_", " "), key="custom_must")
         spec["lighting"] = a3.selectbox("Lighting", ["any"] + _audit.CONDITIONS["lighting"], key="custom_light")
         st.caption("Your description searches the archive (planned by W&B Inference) and is what Cosmos checks every "
@@ -275,7 +289,7 @@ def page():
     n = b.number_input("Clips per round", 3, 30, key="per_round")
     c.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
     run = c.button("Build dataset", type="primary", use_container_width=True, disabled=not (uc or "").strip())
-    for k in ("mode", "target", "per_round", "custom_light"):
+    for k in ("mode", "target", "per_round", "custom_light", "custom_objs"):
         ss[f"_keep_{k}"] = ss.get(k)
     # arriving from the launch page: start straight away
     run = (ss.pop("autorun", False) and bool((uc or "").strip())) or run

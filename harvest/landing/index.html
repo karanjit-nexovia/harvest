@@ -158,6 +158,12 @@ textarea:focus { border-color: rgba(34,211,238,.7); box-shadow: 0 0 0 4px rgba(3
 .chip.sel { color: #04060C; background: var(--cyan); border-color: var(--cyan); font-weight: 600; }
 .chip.q { text-transform: none; }
 .chip.sel.amb { background: var(--amber); border-color: var(--amber); }
+.addobj { display: flex; gap: 8px; margin-top: 10px; }
+.addobj input { flex: 1; border-radius: 999px; padding: 9px 16px; font: inherit; font-size: 14px; color: var(--ink);
+  background: rgba(0,0,0,.35); border: 1px dashed rgba(255,255,255,.22); outline: none; }
+.addobj input:focus { border-color: var(--amber); border-style: solid; }
+.addobj button { border-radius: 999px; padding: 9px 18px; font-size: 14px; font-weight: 600; color: #04060C; background: var(--amber); }
+.chip.own { border-style: dashed; } .chip.own.sel { border-style: solid; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 30px; flex-wrap: wrap; }
 .step { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--dim); }
 .step button { width: 34px; height: 34px; border-radius: 10px; border: 1px solid rgba(255,255,255,.16); font-size: 18px; }
@@ -278,8 +284,9 @@ textarea:focus { border-color: rgba(34,211,238,.7); box-shadow: 0 0 0 4px rgba(3
     <textarea id="d-text" maxlength="240" aria-label="Describe the footage"></textarea>
     <div class="lbl">Which cameras <span style="text-transform:none;letter-spacing:0">(none selected = Harvest chooses)</span></div>
     <div class="chips" id="d-cams"></div>
-    <div class="lbl">Every clip must show</div>
+    <div class="lbl">Every clip must show <span style="text-transform:none;letter-spacing:0">(add your own: Cosmos can look for anything)</span></div>
     <div class="chips" id="d-must"></div>
+    <div class="addobj"><input id="d-new" maxlength="40" placeholder="+ Add an object, e.g. can, tree, ladder" aria-label="Add your own object"><button id="d-add">Add</button></div>
     <div class="lbl">Lighting</div>
     <div class="chips" id="d-light"></div>
     <div class="row">
@@ -447,7 +454,7 @@ $("#cf-go").onclick = () => finish({ action: "preset", preset: chosen.name, targ
 const EXAMPLES = ["A forklift reversing while a worker walks behind it",
   "People carrying boxes across a loading dock", "Cars merging onto a busy highway at dusk",
   "A cyclist passing close to a parked truck"];
-let must = new Set(), cams = new Set(), light = "any";
+let must = new Set(), cams = new Set(), own = new Set(), light = "any";
 function buildDescribe() {
   const camList = ARGS.cameras || [];
   $("#d-cams").innerHTML = camList.map((c) => `<button class="chip q" data-c="${c.id}">${c.name}</button>`).join("");
@@ -455,6 +462,21 @@ function buildDescribe() {
   const objs = ARGS.objects || ["person", "forklift", "pallet", "box", "cart", "car", "truck", "bicycle"];
   $("#d-must").innerHTML = objs.map((o) => `<button class="chip" data-o="${o}">${o.replace("_", " ")}</button>`).join("");
   $$("#d-must .chip").forEach((c) => (c.onclick = () => { c.classList.toggle("sel"); must.has(c.dataset.o) ? must.delete(c.dataset.o) : must.add(c.dataset.o); }));
+  const addOwn = () => {
+    const inp = $("#d-new");
+    inp.value.split(",").map((s) => s.trim().toLowerCase()).filter((s) => s.length > 1).forEach((name) => {
+      const key = name.replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      if (!key || own.has(key) || objs.includes(key)) return;
+      own.add(key); must.add(key);
+      const b = document.createElement("button");
+      b.className = "chip own sel"; b.dataset.o = key; b.textContent = name;
+      b.onclick = () => { b.classList.toggle("sel"); must.has(key) ? must.delete(key) : must.add(key); };
+      $("#d-must").appendChild(b);
+    });
+    inp.value = "";
+  };
+  $("#d-add").onclick = addOwn;
+  $("#d-new").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addOwn(); } });
   const lights = ["any"].concat(ARGS.lighting || ["day", "night", "dim", "backlit"]);
   $("#d-light").innerHTML = lights.map((l) => `<button class="chip amb ${l === "any" ? "sel" : ""}" data-l="${l}">${l}</button>`).join("");
   $$("#d-light .chip").forEach((c) => (c.onclick = () => { $$("#d-light .chip").forEach((x) => x.classList.remove("sel")); c.classList.add("sel"); light = c.dataset.l; }));
@@ -469,7 +491,7 @@ function buildDescribe() {
     ta.placeholder = "e.g. " + s.slice(0, Math.max(0, ch));
     setTimeout(type, del ? 18 : 42);
   })();
-  $("#d-go").onclick = () => finish({ action: "describe", text: ta.value.trim(), cameras: [...cams], must: [...must], lighting: light, target });
+  $("#d-go").onclick = () => finish({ action: "describe", text: ta.value.trim(), cameras: [...cams], objects: [...own], must: [...must], lighting: light, target });
 }
 $$(".tgt").forEach((b) => (b.onclick = () => {
   target = Math.max(1, Math.min(20, target + +b.dataset.d));

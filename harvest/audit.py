@@ -24,6 +24,48 @@ from . import config, segment, vss
 OBJECTS = {"person": "person", "car": "car", "truck": "truck", "bus": "bus", "motorcycle": "motorcycle",
            "bicycle": "bicycle", "traffic_light": "traffic light", "forklift": None, "pallet": None,
            "box": None, "cart": None, "shelf_rack": None, "cone": None, "scooter": None}
+# The 80 classes the deployed YOLO11 (COCO) can name at all
+COCO = ["person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
+        "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+        "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
+        "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard",
+        "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple",
+        "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch",
+        "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard",
+        "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors",
+        "teddy bear", "hair drier", "toothbrush"]
+_COCO_SYN = {"bike": "bicycle", "motorbike": "motorcycle", "phone": "cell phone", "cellphone": "cell phone",
+             "mobile phone": "cell phone", "sofa": "couch", "table": "dining table", "plant": "potted plant",
+             "television": "tv", "fridge": "refrigerator", "bag": "handbag", "glass": "wine glass",
+             "ball": "sports ball", "hydrant": "fire hydrant", "plane": "airplane", "people": "person",
+             "pedestrian": "person", "worker": "person", "van": "car", "suv": "car", "lorry": "truck"}
+
+
+def object_key(name):
+    """'Fire extinguisher ' -> 'fire_extinguisher' (the form Cosmos is asked to use)."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")[:40]
+
+
+def coco_for(name):
+    """The COCO class that would cover this object, or None if the deployed YOLO11 cannot detect it at all."""
+    n = str(name).lower().replace("_", " ").strip()
+    for cand in (n, n[:-1] if n.endswith("s") else n, _COCO_SYN.get(n), _COCO_SYN.get(n[:-1] if n.endswith("s") else n)):
+        if cand and cand in COCO:
+            return cand
+    return None
+
+
+def vocab(extra=()):
+    """{object: COCO class or None}: the built-in objects plus the user's own."""
+    v = dict(OBJECTS)
+    for e in extra or ():
+        k = object_key(e)
+        if k and k not in v:
+            v[k] = coco_for(k)
+    return v
+
+
 CONDITIONS = {"lighting": ["day", "night", "backlit", "dim"], "crowding": ["empty", "sparse", "moderate", "dense"],
               "occlusion": ["low", "medium", "high"], "distance": ["near", "mid", "far"]}
 DEFAULT_QUERIES = ["people", "vehicles", "forklift", "workers in an aisle", "busy scene", "empty scene"]
@@ -100,7 +142,7 @@ Also return "matches_request": true or false (does this clip show that, clearly 
 and "match_reason": "<one sentence why>". Put them in the same JSON object."""
 
 
-def inventory(path, request=""):
+def inventory(path, request="", extra_objects=()):
     """Cosmos3-Reason's inventory of one clip -> (dict, seconds, error). With a request, also whether it fits."""
     import re
     t0 = time.time()
@@ -113,9 +155,17 @@ def inventory(path, request=""):
                             "description": "forklift turns into the aisle about a metre from a walking worker"}],
                 "matches": True, "match_reason": "mock: a forklift and a worker share the aisle"}, 0.0, None
     mode = segment._MODE["input"] or "video"
-    text_prompt = PROMPT + (REQUEST.format(request=request.replace('"', "'")) if request else "")
-    schema = dict(SCHEMA, properties=dict(SCHEMA["properties"], matches_request={"type": "boolean"},
-                                          match_reason={"type": "string"})) if request else SCHEMA
+    voc = vocab(extra_objects)
+    text_prompt = PROMPT.replace(f'Objects (use only these names): {", ".join(OBJECTS)}.',
+                                 f'Objects (use only these names): {", ".join(voc)}.')
+    text_prompt += REQUEST.format(request=request.replace('"', "'")) if request else ""
+    props = dict(SCHEMA["properties"])
+    props["objects"] = {"type": "array", "items": {"type": "object", "required": ["name"],
+                        "properties": {"name": {"enum": list(voc)}, "count": {"type": "number"},
+                                       "visibility": {"type": "string"}}}}
+    if request:
+        props.update(matches_request={"type": "boolean"}, match_reason={"type": "string"})
+    schema = dict(SCHEMA, properties=props)
     msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + segment._content(path, mode)}]
     err = None
     for attempt in range(2):
@@ -131,7 +181,7 @@ def inventory(path, request=""):
             data = segment._loads(re.search(r"\{.*\}", text, re.S).group(0))
             objs = []
             for o in data.get("objects") or []:
-                name = segment._nearest(o.get("name", ""), list(OBJECTS), None)
+                name = segment._nearest(o.get("name", ""), list(voc), None)
                 if name:
                     try:
                         cnt = int(float(o.get("count", 1) or 1))
@@ -177,19 +227,20 @@ def describe(out_dir, progress=print):
     return recs
 
 
-def compare(inv, yolo, yolo_avg=None, err=None):
+def compare(inv, yolo, yolo_avg=None, err=None, objects=None):
     """-> (checks, phantoms): per object Cosmos saw, did YOLO report it; labels YOLO made up."""
+    OBJ = objects or OBJECTS
     yolo_avg = yolo_avg or {}
     have = yolo_classes(yolo)
     checks = []
     for o in inv["objects"]:
-        coco = OBJECTS[o["name"]]
+        coco = OBJ.get(o["name"], coco_for(o["name"]))
         avg = yolo_avg.get(coco, 0.0) if coco else 0.0
         checks.append({"object": o["name"], "cosmos_count": o["count"], "visibility": o.get("visibility", ""),
                        "coco_class": coco, "yolo_found": bool(coco and coco in have), "yolo_avg_count": avg,
                        "count_recall": round(min(1.0, avg / o["count"]), 3) if coco and o["count"] else 0.0})
     # phantoms: classes YOLO reported that nothing Cosmos saw could explain (a forklift called "boat")
-    explained = {OBJECTS[o["name"]] for o in inv["objects"] if OBJECTS[o["name"]]}
+    explained = {OBJ.get(o["name"], coco_for(o["name"])) for o in inv["objects"]} - {None}
     phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
     return checks, phantoms
 
@@ -255,7 +306,7 @@ def _rate(found, total):
     return round(found / total, 3) if total else None
 
 
-def report(recs):
+def report(recs, objects=None):
     ok = [r for r in recs if not r.get("error")]
     cr_obj = collections.defaultdict(list)
     cr_cond = collections.defaultdict(list)
@@ -285,8 +336,10 @@ def report(recs):
                 calls[c["object"]].update(r.get("phantoms", []))
     def mean(xs):
         return round(sum(xs) / len(xs), 3) if xs else None
-    objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": OBJECTS[o] is not None,
-                   "count_recall": mean(cr_obj.get(o, [])) if OBJECTS[o] else 0.0}
+    OBJ = objects or OBJECTS
+    has = {o: OBJ.get(o, coco_for(o)) is not None for o in by_obj}
+    objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": has[o],
+                   "count_recall": mean(cr_obj.get(o, [])) if has[o] else 0.0}
                for o, (f, t) in sorted(by_obj.items(), key=lambda kv: -kv[1][1])}
     phantom = collections.Counter(p for r in ok for p in r.get("phantoms", []))
     phantom_by_cam = collections.Counter((r["camera_id"], p) for r in ok for p in r.get("phantoms", []))
