@@ -6,6 +6,15 @@
 
 ![How Harvest works](docs/architecture.png)
 
+## Screenshots
+
+| | |
+|---|---|
+| ![Launch](docs/screenshots/1-loader.png) **Launch:** “Every camera is a dataset.” | ![Story](docs/screenshots/2-story.png) **The problem**, with real numbers from the audit |
+| ![Choose](docs/screenshots/3-choose.png) **What would you like to train today?** | ![Use cases](docs/screenshots/4-use-cases.png) **Pick a use case:** a 3D ring you drag |
+| ![Describe](docs/screenshots/5-describe.png) **Describe your own:** cameras, must-show objects (add any, e.g. “hard hat”), lighting | ![Audit report](docs/screenshots/7-audit-report.png) **Audit report:** the deployed YOLO11 graded by Cosmos on 48 clips |
+
+
 **Your vision model is already running on every camera. Nobody checks it.**
 Harvest runs a **Blindspot audit**: it uses NVIDIA Cosmos3-Reason as a judge over the VAST-indexed video archive, grades the YOLO11
 detections the pipeline stored at ingest, and finds where the model is blind — by object, by camera
