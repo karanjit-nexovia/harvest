@@ -70,11 +70,14 @@ def _frames_content(path, n):
     return parts
 
 
-def _content(path):
-    if config.COSMOS_INPUT == "video":
+_MODE = {"input": None}      # what this endpoint accepted last ("video" / "frames")
+
+
+def _content(path, mode):
+    if mode == "video":
         b64 = base64.b64encode(path.read_bytes()).decode()
         return [{"type": "video_url", "video_url": {"url": f"data:video/mp4;base64,{b64}"}}]
-    return _frames_content(path, config.COSMOS_FRAMES)
+    return _frames_content(path, min(5, config.COSMOS_FRAMES))
 
 
 def _parse(text):
@@ -100,8 +103,23 @@ def segment(path, duration):
     t0 = time.time()
     if config.MOCK:
         return _mock(path, duration), 0.0, None
-    messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + _content(path)}]
+    mode = config.COSMOS_INPUT if config.COSMOS_INPUT != "auto" else (_MODE["input"] or "video")
+    messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + _content(path, mode)}]
     err = None
+    if config.COSMOS_INPUT == "auto" and mode == "video" and _MODE["input"] is None:
+        try:   # does this endpoint take video? (once)
+            r = client().chat.completions.create(model=model_id(), messages=messages, temperature=0.2, max_tokens=800)
+            _MODE["input"] = "video"
+            try:
+                return _parse(r.choices[0].message.content or ""), time.time() - t0, None
+            except Exception as e:  # noqa: BLE001 -- it answered; fix the JSON below
+                text = r.choices[0].message.content or ""
+                messages += [{"role": "assistant", "content": text},
+                             {"role": "user", "content": "That was not valid JSON for the schema. Return ONLY the JSON."}]
+        except Exception as e:  # noqa: BLE001 -- no video input here: frames from now on
+            print("cosmos: video input refused, using frames --", f"{type(e).__name__}: {e}"[:200])
+            _MODE["input"] = "frames"
+            messages = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + _content(path, "frames")}]
     for attempt in range(2):
         try:
             r = client().chat.completions.create(model=model_id(), messages=messages,

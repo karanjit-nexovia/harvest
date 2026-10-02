@@ -30,8 +30,8 @@ YOLO_FPS = float(os.getenv("YOLO_FPS", "5"))
 COSMOS_BASE_URL = os.getenv("COSMOS_BASE_URL", "")
 COSMOS_API_KEY = os.getenv("COSMOS_API_KEY", "")
 COSMOS_MODEL = os.getenv("COSMOS_MODEL", "")
-COSMOS_INPUT = os.getenv("COSMOS_INPUT", "frames")      # "video" (data URL) or "frames" (N jpgs)
-COSMOS_FRAMES = int(os.getenv("COSMOS_FRAMES", "8"))
+COSMOS_INPUT = os.getenv("COSMOS_INPUT", "auto")        # "video", "frames", or "auto" (video, else frames)
+COSMOS_FRAMES = int(os.getenv("COSMOS_FRAMES", "5"))      # the event's Cosmos takes at most 5 images
 MOCK = os.getenv("HARVEST_MOCK", "0") == "1"            # no API calls: deterministic fake steps
 
 # cost ($ per GPU-hour) for the cost table
