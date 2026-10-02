@@ -94,8 +94,14 @@ def _events(raw):
     return sorted(out, key=lambda e: e["start_s"])
 
 
-def inventory(path):
-    """Cosmos3-Reason's inventory of one clip -> (dict, seconds, error)."""
+REQUEST = """
+The team is building a training dataset for: "{request}".
+Also return "matches_request": true or false (does this clip show that, clearly enough to train on?)
+and "match_reason": "<one sentence why>". Put them in the same JSON object."""
+
+
+def inventory(path, request=""):
+    """Cosmos3-Reason's inventory of one clip -> (dict, seconds, error). With a request, also whether it fits."""
     import re
     t0 = time.time()
     if config.MOCK:
@@ -104,18 +110,22 @@ def inventory(path):
                 "conditions": {"lighting": "dim", "crowding": "sparse", "occlusion": "low", "distance": "mid"},
                 "notes": "mock", "summary": "A worker walks an aisle as a forklift turns in front of them.",
                 "events": [{"type": "close_call", "start_s": 2.0, "end_s": 4.5, "severity": "high",
-                            "description": "forklift turns into the aisle about a metre from a walking worker"}]}, 0.0, None
+                            "description": "forklift turns into the aisle about a metre from a walking worker"}],
+                "matches": True, "match_reason": "mock: a forklift and a worker share the aisle"}, 0.0, None
     mode = segment._MODE["input"] or "video"
-    msgs = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + segment._content(path, mode)}]
+    text_prompt = PROMPT + (REQUEST.format(request=request.replace('"', "'")) if request else "")
+    schema = dict(SCHEMA, properties=dict(SCHEMA["properties"], matches_request={"type": "boolean"},
+                                          match_reason={"type": "string"})) if request else SCHEMA
+    msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + segment._content(path, mode)}]
     err = None
     for attempt in range(2):
         try:
             kw = dict(model=segment.model_id(), messages=msgs, temperature=0.1, max_tokens=1100)
             try:
-                r = segment.client().chat.completions.create(**kw, extra_body={"guided_json": SCHEMA})
+                r = segment.client().chat.completions.create(**kw, extra_body={"guided_json": schema})
             except Exception:  # noqa: BLE001 -- no guided decoding / no video: plain call on frames
                 segment._MODE["input"] = "frames"
-                msgs = [{"role": "user", "content": [{"type": "text", "text": PROMPT}] + segment._content(path, "frames")}]
+                msgs = [{"role": "user", "content": [{"type": "text", "text": text_prompt}] + segment._content(path, "frames")}]
                 r = segment.client().chat.completions.create(**dict(kw, messages=msgs))
             text = r.choices[0].message.content or ""
             data = segment._loads(re.search(r"\{.*\}", text, re.S).group(0))
@@ -131,11 +141,13 @@ def inventory(path):
             cond = data.get("conditions") or {}
             cond = {k: segment._nearest(cond.get(k, ""), v, v[0]) for k, v in CONDITIONS.items()}
             return {"objects": objs, "conditions": cond, "notes": str(data.get("notes", "")),
-                    "summary": str(data.get("summary", ""))[:300], "events": _events(data.get("events"))}, \
-                time.time() - t0, None
+                    "summary": str(data.get("summary", ""))[:300], "events": _events(data.get("events")),
+                    "matches": str(data.get("matches_request", True)).lower() not in ("false", "0", "no"),
+                    "match_reason": str(data.get("match_reason", ""))[:300]}, time.time() - t0, None
         except Exception as e:  # noqa: BLE001
             err = f"{type(e).__name__}: {e}"[:300]
-    return {"objects": [], "conditions": {}, "notes": "", "summary": "", "events": []}, time.time() - t0, err
+    return {"objects": [], "conditions": {}, "notes": "", "summary": "", "events": [], "matches": False,
+            "match_reason": "Cosmos could not read this clip"}, time.time() - t0, err
 
 
 def clip_seconds(path):
@@ -163,6 +175,23 @@ def describe(out_dir, progress=print):
         with open(out_dir / "clips.jsonl", "w") as fh:
             fh.writelines(json.dumps(x) + "\n" for x in recs)
     return recs
+
+
+def compare(inv, yolo, yolo_avg=None, err=None):
+    """-> (checks, phantoms): per object Cosmos saw, did YOLO report it; labels YOLO made up."""
+    yolo_avg = yolo_avg or {}
+    have = yolo_classes(yolo)
+    checks = []
+    for o in inv["objects"]:
+        coco = OBJECTS[o["name"]]
+        avg = yolo_avg.get(coco, 0.0) if coco else 0.0
+        checks.append({"object": o["name"], "cosmos_count": o["count"], "visibility": o.get("visibility", ""),
+                       "coco_class": coco, "yolo_found": bool(coco and coco in have), "yolo_avg_count": avg,
+                       "count_recall": round(min(1.0, avg / o["count"]), 3) if coco and o["count"] else 0.0})
+    # phantoms: classes YOLO reported that nothing Cosmos saw could explain (a forklift called "boat")
+    explained = {OBJECTS[o["name"]] for o in inv["objects"] if OBJECTS[o["name"]]}
+    phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
+    return checks, phantoms
 
 
 def yolo_classes(counts):
@@ -201,19 +230,7 @@ def run(cameras, per_camera=15, queries=None, progress=print, on_clip=None, pref
             path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
             inv, secs, err = inventory(path)
             cosmos_s += secs
-            have = yolo_classes(yolo)
-            checks = []
-            for o in inv["objects"]:
-                coco = OBJECTS[o["name"]]
-                avg = yolo_avg.get(coco, 0.0) if coco else 0.0
-                checks.append({"object": o["name"], "cosmos_count": o["count"], "visibility": o["visibility"],
-                               "coco_class": coco, "yolo_found": bool(coco and coco in have),
-                               "yolo_avg_count": avg,
-                               # share of the objects YOLO finds in a typical frame (capped at 1)
-                               "count_recall": round(min(1.0, avg / o["count"]), 3) if coco and o["count"] else 0.0})
-            # phantoms: classes YOLO reported that nothing Cosmos saw could explain (a forklift called "boat")
-            explained = {OBJECTS[o["name"]] for o in inv["objects"] if OBJECTS[o["name"]]}
-            phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
+            checks, phantoms = compare(inv, yolo, yolo_avg, err)
             recs.append({"clip_id": cid, "camera_id": cam, "source": h["source"], "file": f"clips/{cid}.mp4",
                          "yolo": yolo, "yolo_avg": yolo_avg, "inventory": inv["objects"], "conditions": inv["conditions"],
                          "notes": inv["notes"], "summary": inv.get("summary", ""), "events": inv.get("events", []),

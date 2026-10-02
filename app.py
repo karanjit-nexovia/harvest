@@ -16,7 +16,7 @@ STEP_COLORS["idle"] = "#DFE1E6"
 
 def runs():
     return sorted([p for p in config.OUT.glob("*") if (p / "clips.jsonl").exists()
-                   and not p.name.startswith(("audit_", "live_", "ds_")) and p.name != "datasets"],
+                   and not p.name.startswith(("audit_", "live_", "ds_", "flow_")) and p.name != "datasets"],
                   key=lambda p: -p.stat().st_mtime)
 
 
@@ -41,15 +41,19 @@ def timeline(rec):
 
 from harvest import ui_audit  # noqa: E402
 ui_audit.sidebar_brand()
-pages = ["Overview", "Live test", "Datasets"]
+pages = ["Build dataset", "Model audit"]
 if st.sidebar.toggle("Research tools", value=False):
-    pages += ["Mine clips", "Label", "Evaluate", "Train"]
+    pages += ["Live test", "Datasets", "Mine clips", "Label", "Evaluate", "Train"]
 page = st.sidebar.radio("Page", pages, label_visibility="collapsed")
 st.sidebar.markdown("<div style='height:24px'></div>", unsafe_allow_html=True)
 st.sidebar.caption("Demo mode (no keys)" if config.MOCK else
                    "Connected · VAST Data · NVIDIA Cosmos3-Reason · Weights & Biases")
 
-if page == "Overview":
+if page == "Build dataset":
+    from harvest import ui_flow
+    ui_flow.page()
+
+elif page == "Model audit":
     ui_audit.overview()
 
 elif page == "Live test":
