@@ -264,9 +264,17 @@ if __name__ == "__main__":
     ap.add_argument("--cameras", default="sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1")
     ap.add_argument("--per-camera", type=int, default=15)
     ap.add_argument("--wandb", action="store_true")
+    ap.add_argument("--report", help="rebuild report.json for an existing audit dir (no new Cosmos calls)")
     a = ap.parse_args()
-    out, _r, rep = run([c.strip() for c in a.cameras.split(",") if c.strip()], a.per_camera)
-    print(json.dumps({k: rep[k] for k in ("headline", "objects", "run")}, indent=1))
+    if a.report:
+        out = Path(a.report)
+        old = json.load(open(out / "report.json"))
+        rep = report([json.loads(l) for l in open(out / "clips.jsonl")])
+        rep["run"] = old.get("run", {})
+        json.dump(rep, open(out / "report.json", "w"), indent=1)
+    else:
+        out, _r, rep = run([c.strip() for c in a.cameras.split(",") if c.strip()], a.per_camera)
+    print(json.dumps({k: rep[k] for k in ("headline", "mislabels", "run")}, indent=1))
     if a.wandb:
         log_wandb(out)
     print("retraining set:", export_retrain(out))
