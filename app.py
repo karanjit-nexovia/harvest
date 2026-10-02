@@ -85,19 +85,23 @@ if page == "Blindspot":
     st.subheader("Detection rate per object")
     st.bar_chart(df.set_index("object")["detection rate"])
     st.dataframe(df, use_container_width=True, hide_index=True)
+    if rep.get("phantoms"):
+        st.subheader("Phantom detections — labels YOLO11 reported that nothing in the clip explains")
+        st.dataframe(pd.DataFrame(rep["phantoms_by_camera"]), use_container_width=True, hide_index=True)
     c1, c2 = st.columns(2)
     c1.subheader("By camera pack")
     c1.dataframe(pd.DataFrame(rep["by_camera"]), use_container_width=True, hide_index=True)
     c2.subheader("By condition")
     c2.dataframe(pd.DataFrame(rep["by_condition"]), use_container_width=True, hide_index=True)
     st.subheader("Failures (the retraining set)")
-    fails = [r for r in recs if any(not c["yolo_found"] for c in r["checks"])]
+    fails = [r for r in recs if any(not c["yolo_found"] for c in r["checks"]) or r.get("phantoms")]
     cols = st.columns(3)
     for i, r in enumerate(fails[:12]):
         with cols[i % 3]:
             st.video(str(out / r["file"]))
-            miss = ", ".join(c["object"] for c in r["checks"] if not c["yolo_found"])
-            st.markdown(f"**YOLO missed: {miss}** · {r['camera_id']}")
+            miss = ", ".join(c["object"] for c in r["checks"] if not c["yolo_found"]) or "—"
+            ph = ", ".join(r.get("phantoms", [])) or "—"
+            st.markdown(f"**YOLO missed: {miss}** · **phantoms: {ph}** · {r['camera_id']}")
             st.caption(f"Cosmos: {', '.join(o['name'] + ' x' + str(o['count']) for o in r['inventory'])} · "
                        f"YOLO said: {', '.join(list(r['yolo'])[:5]) or 'nothing'} · {json.dumps(r['conditions'])}")
             if r.get("notes"):

@@ -122,12 +122,16 @@ def run(cameras, per_camera=15, queries=None, progress=print):
                 coco = OBJECTS[o["name"]]
                 checks.append({"object": o["name"], "cosmos_count": o["count"], "visibility": o["visibility"],
                                "coco_class": coco, "yolo_found": bool(coco and coco in have)})
+            # phantoms: classes YOLO reported that nothing Cosmos saw could explain (a forklift called "boat")
+            explained = {OBJECTS[o["name"]] for o in inv["objects"] if OBJECTS[o["name"]]}
+            phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
             recs.append({"clip_id": cid, "camera_id": cam, "source": h["source"], "file": f"clips/{cid}.mp4",
                          "yolo": yolo, "inventory": inv["objects"], "conditions": inv["conditions"],
-                         "notes": inv["notes"], "checks": checks, "error": err, "cosmos_s": round(secs, 2)})
+                         "notes": inv["notes"], "checks": checks, "phantoms": phantoms, "error": err,
+                         "cosmos_s": round(secs, 2)})
             misses = [c["object"] for c in checks if not c["yolo_found"]]
             progress(f"  [{n + 1}/{len(hits)}] cosmos sees {[o['name'] for o in inv['objects']]} | "
-                     f"yolo misses {misses}{' | ERR ' + err[:60] if err else ''}")
+                     f"yolo misses {misses} | yolo phantoms {phantoms}{' | ERR ' + err[:60] if err else ''}")
             with open(out / "clips.jsonl", "w") as fh:
                 fh.writelines(json.dumps(r) + "\n" for r in recs)
     rep = report(recs)
@@ -166,9 +170,16 @@ def report(recs):
                 fails[c["object"]].append(r["clip_id"])
     objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": OBJECTS[o] is not None}
                for o, (f, t) in sorted(by_obj.items(), key=lambda kv: -kv[1][1])}
+    phantom = collections.Counter(p for r in ok for p in r.get("phantoms", []))
+    phantom_by_cam = collections.Counter((r["camera_id"], p) for r in ok for p in r.get("phantoms", []))
     worst = sorted(((o, v) for o, v in objects.items() if v["seen"] >= 2), key=lambda kv: (kv[1]["rate"] or 0))
     head = ", ".join(f"{o} {int(100 * (v['rate'] or 0))}% detected ({v['seen']} clips)" for o, v in worst[:3])
+    if phantom:
+        top = phantom.most_common(1)[0]
+        head += f"; phantom '{top[0]}' in {top[1]} of {len(ok)} clips"
     return {"headline": head, "objects": objects,
+            "phantoms": [{"yolo_label": p, "clips": n, "of": len(ok)} for p, n in phantom.most_common()],
+            "phantoms_by_camera": [{"camera": c, "yolo_label": p, "clips": n} for (c, p), n in phantom_by_cam.most_common()],
             "by_camera": [{"object": o, "camera": c, "detected": f, "seen": t, "rate": _rate(f, t)}
                           for (o, c), (f, t) in sorted(by_obj_cam.items())],
             "by_condition": [{"object": o, "condition": k, "value": v, "detected": f, "seen": t, "rate": _rate(f, t)}
