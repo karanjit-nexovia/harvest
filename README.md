@@ -1,5 +1,9 @@
 # Harvest
 
+**[▶ Watch the 3-minute demo](https://youtu.be/VZQjUoIeM70)**
+
+[![Harvest demo video](https://img.youtube.com/vi/VZQjUoIeM70/maxresdefault.jpg)](https://youtu.be/VZQjUoIeM70)
+
 ![How Harvest works](docs/architecture.png)
 
 **Your vision model is already running on every camera. Nobody checks it.**
