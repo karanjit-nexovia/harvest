@@ -134,6 +134,14 @@ def archive_segments():
         return None
 
 
+def per_frame(det):
+    """{class: average objects per frame} from the stored sidecar (object_counts / frame_count)."""
+    if not isinstance(det, dict) or not isinstance(det.get("object_counts"), dict):
+        return {}
+    frames = max(1, int(det.get("frame_count") or 1))
+    return {str(k): round(float(v) / frames, 2) for k, v in det["object_counts"].items()}
+
+
 def cosmos_url():
     return env("COSMOS3_REASON_URL") or f"http://{env('GPU_HOST', GPU_HOST_DEFAULT)}:8001"
 

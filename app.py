@@ -80,10 +80,11 @@ if page == "Blindspot":
     m[3].metric("Cosmos time", f"{run.get('cosmos_s', 0):.0f} s")
     st.error(f"Blind spots: {rep['headline']}")
     df = pd.DataFrame([{"object": o, "seen by Cosmos (clips)": v["seen"], "YOLO11 detected": v["detected"],
-                        "detection rate": v["rate"], "class in model": "yes" if v["has_class"] else "NO"}
+                        "detection rate": v["rate"], "share found per frame": v.get("count_recall"),
+                        "class in model": "yes" if v["has_class"] else "NO"}
                        for o, v in rep["objects"].items()])
-    st.subheader("Detection rate per object")
-    st.bar_chart(df.set_index("object")["detection rate"])
+    st.subheader("Per object: found at all, and how many of them per frame")
+    st.bar_chart(df.set_index("object")[["detection rate", "share found per frame"]].fillna(0))
     st.dataframe(df, use_container_width=True, hide_index=True)
     if rep.get("phantoms"):
         st.subheader("Phantom detections — labels YOLO11 reported that nothing in the clip explains")

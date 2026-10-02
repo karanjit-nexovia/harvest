@@ -31,7 +31,7 @@ DEFAULT_QUERIES = ["people", "vehicles", "forklift", "workers in an aisle", "bus
 PROMPT = f"""You are auditing an object detector. Watch the clip and list, strictly, what is visible.
 Objects (use only these names): {", ".join(OBJECTS)}.
 Return ONLY JSON:
-{{"objects": [{{"name": ..., "count": <max visible at once>, "visibility": "clear|partial|tiny"}}],
+{{"objects": [{{"name": ..., "count": <how many are typically visible at the same time>, "visibility": "clear|partial|tiny"}}],
  "conditions": {{"lighting": one of {CONDITIONS['lighting']}, "crowding": one of {CONDITIONS['crowding']},
                 "occlusion": one of {CONDITIONS['occlusion']}, "distance": one of {CONDITIONS['distance']}}},
  "notes": "<one sentence on what is hard to see in this clip>"}}
@@ -111,7 +111,9 @@ def run(cameras, per_camera=15, queries=None, progress=print):
         hits = sample(cam, per_camera, queries, progress)
         progress(f"{cam}: {len(hits)} segments")
         for n, h in enumerate(hits):
-            yolo = vss.class_counts(vss.detections(h["source"]))
+            det = vss.detections(h["source"])
+            yolo = vss.class_counts(det)
+            yolo_avg = vss.per_frame(det)
             cid = f"{cam}_{n:03d}"
             path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
             inv, secs, err = inventory(path)
@@ -120,13 +122,17 @@ def run(cameras, per_camera=15, queries=None, progress=print):
             checks = []
             for o in inv["objects"]:
                 coco = OBJECTS[o["name"]]
+                avg = yolo_avg.get(coco, 0.0) if coco else 0.0
                 checks.append({"object": o["name"], "cosmos_count": o["count"], "visibility": o["visibility"],
-                               "coco_class": coco, "yolo_found": bool(coco and coco in have)})
+                               "coco_class": coco, "yolo_found": bool(coco and coco in have),
+                               "yolo_avg_count": avg,
+                               # share of the objects YOLO finds in a typical frame (capped at 1)
+                               "count_recall": round(min(1.0, avg / o["count"]), 3) if coco and o["count"] else 0.0})
             # phantoms: classes YOLO reported that nothing Cosmos saw could explain (a forklift called "boat")
             explained = {OBJECTS[o["name"]] for o in inv["objects"] if OBJECTS[o["name"]]}
             phantoms = sorted(c for c in have if c not in explained) if not err and inv["objects"] else []
             recs.append({"clip_id": cid, "camera_id": cam, "source": h["source"], "file": f"clips/{cid}.mp4",
-                         "yolo": yolo, "inventory": inv["objects"], "conditions": inv["conditions"],
+                         "yolo": yolo, "yolo_avg": yolo_avg, "inventory": inv["objects"], "conditions": inv["conditions"],
                          "notes": inv["notes"], "checks": checks, "phantoms": phantoms, "error": err,
                          "cosmos_s": round(secs, 2)})
             misses = [c["object"] for c in checks if not c["yolo_found"]]
@@ -148,6 +154,8 @@ def _rate(found, total):
 
 def report(recs):
     ok = [r for r in recs if not r.get("error")]
+    cr_obj = collections.defaultdict(list)
+    cr_cond = collections.defaultdict(list)
     by_obj = collections.defaultdict(lambda: [0, 0])
     by_obj_cam = collections.defaultdict(lambda: [0, 0])
     by_cond = collections.defaultdict(lambda: [0, 0])
@@ -163,17 +171,27 @@ def report(recs):
             by_obj_cam[(c["object"], r["camera_id"])][1] += 1
             by_obj_cam[(c["object"], r["camera_id"])][0] += c["yolo_found"]
             if c["coco_class"]:
+                cr_obj[c["object"]].append(c.get("count_recall", 0.0))
                 for k, v in r["conditions"].items():
+                    cr_cond[(c["object"], k, v)].append(c.get("count_recall", 0.0))
                     by_cond[(c["object"], k, v)][1] += 1
                     by_cond[(c["object"], k, v)][0] += c["yolo_found"]
             if not c["yolo_found"]:
                 fails[c["object"]].append(r["clip_id"])
-    objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": OBJECTS[o] is not None}
+    def mean(xs):
+        return round(sum(xs) / len(xs), 3) if xs else None
+    objects = {o: {"detected": f, "seen": t, "rate": _rate(f, t), "has_class": OBJECTS[o] is not None,
+                   "count_recall": mean(cr_obj.get(o, [])) if OBJECTS[o] else 0.0}
                for o, (f, t) in sorted(by_obj.items(), key=lambda kv: -kv[1][1])}
     phantom = collections.Counter(p for r in ok for p in r.get("phantoms", []))
     phantom_by_cam = collections.Counter((r["camera_id"], p) for r in ok for p in r.get("phantoms", []))
     worst = sorted(((o, v) for o, v in objects.items() if v["seen"] >= 2), key=lambda kv: (kv[1]["rate"] or 0))
     head = ", ".join(f"{o} {int(100 * (v['rate'] or 0))}% detected ({v['seen']} clips)" for o, v in worst[:3])
+    under = sorted(((o, v) for o, v in objects.items() if v["has_class"] and v["seen"] >= 2
+                    and v["count_recall"] is not None), key=lambda kv: kv[1]["count_recall"])
+    if under:
+        o, v = under[0]
+        head += f"; {o}: YOLO finds {int(100 * v['count_recall'])}% of them per frame"
     if phantom:
         top = phantom.most_common(1)[0]
         head += f"; phantom '{top[0]}' in {top[1]} of {len(ok)} clips"
@@ -182,7 +200,8 @@ def report(recs):
             "phantoms_by_camera": [{"camera": c, "yolo_label": p, "clips": n} for (c, p), n in phantom_by_cam.most_common()],
             "by_camera": [{"object": o, "camera": c, "detected": f, "seen": t, "rate": _rate(f, t)}
                           for (o, c), (f, t) in sorted(by_obj_cam.items())],
-            "by_condition": [{"object": o, "condition": k, "value": v, "detected": f, "seen": t, "rate": _rate(f, t)}
+            "by_condition": [{"object": o, "condition": k, "value": v, "detected": f, "seen": t, "rate": _rate(f, t),
+                              "count_recall": mean(cr_cond.get((o, k, v), []))}
                              for (o, k, v), (f, t) in sorted(by_cond.items()) if t >= 2],
             "retrain": {o: ids for o, ids in fails.items()}, "errors": len(recs) - len(ok)}
 
@@ -195,6 +214,9 @@ def log_wandb(out_dir):
     rep = json.load(open(out_dir / "report.json"))
     wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None,
                     name=f"blindspot-{out_dir.name}", job_type="audit", config=rep.get("run", {}))
+    wb.log({"count_recall": wandb.plot.bar(wandb.Table(
+        data=[[o, v.get("count_recall") or 0] for o, v in rep["objects"].items()], columns=["object", "count_recall"]),
+        "object", "count_recall", title="Share of objects YOLO11 finds per frame (vs Cosmos count)")})
     wb.log({"objects": wandb.plot.bar(wandb.Table(
         data=[[o, v["rate"] or 0] for o, v in rep["objects"].items()], columns=["object", "yolo_detection_rate"]),
         "object", "yolo_detection_rate", title="YOLO11 detection rate vs Cosmos3-Reason inventory")})
