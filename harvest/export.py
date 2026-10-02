@@ -10,7 +10,7 @@ from pathlib import Path
 def export(run_dir):
     run_dir = Path(run_dir)
     recs = [json.loads(l) for l in open(run_dir / "clips.jsonl")]
-    good = [r for r in recs if not r.get("error") and r["label"] != "other" and r["steps"]]
+    good = [r for r in recs if not r.get("error") and r.get("verified", True) and r["label"] != "other" and r["steps"]]
     ds = run_dir / "dataset"
     shutil.rmtree(ds, ignore_errors=True)
     (ds / "clips").mkdir(parents=True)

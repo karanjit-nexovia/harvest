@@ -47,15 +47,18 @@ def run_vss(query, k, progress, camera=None, domain=None):
         clip_id = f"seg{n:03d}"
         path = vss.download(h["source"], run_dir / "clips" / f"{clip_id}.mp4")
         dur = clip_seconds(path) or (h["end"] - h["start"])
-        result, secs, err = segment.segment(path, dur, domain)
+        result, secs, err = segment.segment(path, dur, domain, request=query)
         stats["cosmos_s"] += secs
         stats["failed"] += err is not None
-        stats["labelled"] += err is None and result["label"] != "other"
+        verified = err is None and bool(result.get("matches_request", True))
+        stats["verified"] = stats.get("verified", 0) + verified
+        stats["labelled"] += verified and result["label"] != "other"
         records.append({"clip_id": clip_id, "domain": domain or config.DOMAIN,
                         "video": h["original_video"] or h["source"], "source": h["source"],
                         "start": 0.0, "end": round(dur, 2), "query": query, "search_score": round(h["score"], 3),
                         "camera_id": h["camera_id"], "location": h["location"], "index_caption": h["reasoning"][:400],
-                        "tracks": counts, "label": result["label"], "steps": result["steps"],
+                        "tracks": counts, "verified": verified, "match_conf": result.get("match_conf"),
+                        "evidence": result.get("evidence", ""), "label": result["label"], "steps": result["steps"],
                         "objects": result.get("objects", []), "notes": result.get("notes", ""), "error": err,
                         "gpu_s": {"yolo": 0.0, "cosmos": round(secs, 2)}, "file": f"clips/{clip_id}.mp4"})
         with open(run_dir / "clips.jsonl", "w") as fh:

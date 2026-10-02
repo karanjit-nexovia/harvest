@@ -47,6 +47,23 @@ def score(pred, truth):
             "boundary_err_s": round(sum(errs) / len(errs), 2) if errs else None}
 
 
+def purity(pred, truth):
+    """Of the clips a person checked: how many raw search hits truly show the request, and how many
+    of the clips Harvest verified do. Plus how well the verifier agrees with the person."""
+    checked = [(pred[c], t) for c, t in truth.items() if c in pred and "relevant" in t]
+    if not checked:
+        return {}
+    raw = sum(1 for _p, t in checked if t["relevant"]) / len(checked)
+    kept = [(p, t) for p, t in checked if p.get("verified", True)]
+    agree = sum(1 for p, t in checked if bool(p.get("verified", True)) == bool(t["relevant"])) / len(checked)
+    tp = sum(1 for p, t in checked if p.get("verified", True) and t["relevant"])
+    true_n = sum(1 for _p, t in checked if t["relevant"])
+    return {"clips_checked": len(checked), "raw_search_precision": round(raw, 3),
+            "harvest_precision": round(sum(1 for _p, t in kept if t["relevant"]) / len(kept), 3) if kept else None,
+            "verifier_agreement": round(agree, 3),
+            "verifier_recall": round(tp / true_n, 3) if true_n else None, "kept": len(kept)}
+
+
 def cost(stats):
     per_cosmos = stats["cosmos_s"] / max(1, stats["kept"])
     # A = Cosmos on every segment of the archive to find the same examples (the brute-force way);
@@ -74,20 +91,29 @@ def evaluate(run_dir, labels=None, use_wandb=False):
     if labels.exists():
         for l in open(labels):
             t = json.loads(l); truth[t["clip_id"]] = t
-    acc = score(pred, truth) if truth else {}
+    acc = score(pred, {k: v for k, v in truth.items() if v.get("relevant", True)}) if truth else {}
+    pur = purity(pred, truth) if truth else {}
     c = cost(stats)
-    out = {"accuracy": acc, "cost": c, "stats": stats}
+    out = {"purity": pur, "accuracy": acc, "cost": c, "stats": stats}
     json.dump(out, open(run_dir / "eval.json", "w"), indent=1)
     if use_wandb:
         import wandb
         wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None, name=run_dir.name, config=stats)
-        wb.log({**{f"acc/{k}": v for k, v in acc.items() if v is not None},
+        wb.log({**{f"purity/{k}": v for k, v in pur.items() if v is not None},
+                **{f"acc/{k}": v for k, v in acc.items() if v is not None},
                 **{f"cost/{k}": v for k, v in c.items() if isinstance(v, (int, float))}})
-        table = wandb.Table(columns=["clip", "label", "steps", "truth_label", "video"])
+        table = wandb.Table(columns=["clip", "harvest_verified", "person_says_relevant", "evidence", "label",
+                                     "steps", "truth_label", "video"])
         for r in recs[:50]:
             t = truth.get(r["clip_id"], {})
-            table.add_data(r["clip_id"], r["label"], " > ".join(s["name"] for s in r["steps"]), t.get("label"),
+            table.add_data(r["clip_id"], r.get("verified"), t.get("relevant"), r.get("evidence", ""), r["label"],
+                           " > ".join(s["name"] for s in r["steps"]), t.get("label"),
                            wandb.Video(str(run_dir / r["file"]), format="mp4"))
+        if pur:
+            wb.log({"purity_bar": wandb.plot.bar(wandb.Table(
+                data=[["Raw VAST search", pur["raw_search_precision"]],
+                      ["Harvest (Cosmos-verified)", pur["harvest_precision"] or 0]], columns=["dataset", "precision"]),
+                "dataset", "precision", title="Share of clips that truly show the request")})
         wb.log({"clips": table, "cost_bar": wandb.plot.bar(
             wandb.Table(data=[["Cosmos on everything", c["A_cosmos_everything_gpu_s"]],
                               ["Harvest (YOLO -> Cosmos)", c["B_harvest_gpu_s"]]], columns=["pipeline", "gpu_s"]),

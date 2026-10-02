@@ -93,9 +93,13 @@ if page == "Harvest":
             m[0].metric("Video searched", f"{stats['searched_video_s'] / 60:.1f} min")
         m[1].metric("VAST search hits", stats["ranges"])
         m[2].metric("YOLO kept", stats["kept"])
-        m[3].metric("Cosmos labelled", stats["labelled"])
+        m[3].metric("Cosmos verified", stats.get("verified", stats["labelled"]))
         if ev.get("cost", {}).get("saving_x"):
             m[4].metric("GPU saved vs Cosmos-on-all", f"{ev['cost']['saving_x']}x")
+    if ev.get("purity"):
+        p = ev["purity"]
+        st.info(f"Dataset purity ({p['clips_checked']} clips checked by a person): raw VAST search "
+                f"{p['raw_search_precision']:.0%} → Harvest-verified {(p['harvest_precision'] or 0):.0%}")
     if ev.get("accuracy"):
         a = ev["accuracy"]
         st.success(f"vs hand labels ({a['clips_compared']} clips): label {a['label_acc']:.0%} · "
@@ -105,8 +109,11 @@ if page == "Harvest":
     for i, r in enumerate(recs):
         with cols[i % 3]:
             st.video(str(run_dir / r["file"]))
-            st.markdown(f"**{r['label']}** · {r['video']} {r['start']:.0f}-{r['end']:.0f}s"
+            badge = "✅ verified" if r.get("verified", True) else "❌ rejected"
+            st.markdown(f"{badge} · **{r['label']}** · {r.get('camera_id') or r['video']}"
                         + (f" · ⚠ {r['error'][:60]}" if r.get("error") else ""))
+            if r.get("evidence"):
+                st.caption(r["evidence"][:160])
             st.markdown(timeline(r), unsafe_allow_html=True)
     if st.button("Export dataset"):
         from harvest import export
@@ -131,6 +138,7 @@ elif page == "Label":
     r = st.selectbox("Clip", todo, format_func=lambda r: r["clip_id"])
     st.video(str(run_dir / r["file"]))
     d = r["end"] - r["start"]
+    relevant = st.radio(f'Does this clip really show "{r["query"]}"?', ["Yes", "No"], horizontal=True) == "Yes"
     label = st.selectbox("Label", config.LABELS)
     n = st.number_input("How many steps", 0, 8, 3)
     steps = []
@@ -141,7 +149,7 @@ elif page == "Label":
         b = c[2].number_input("end s", 0.0, d, min(d, (j + 1) * d / max(1, n)), 0.1, key=f"b{j}")
         steps.append({"name": name, "start_s": a, "end_s": b})
     if st.button("Save label", type="primary"):
-        done[r["clip_id"]] = {"clip_id": r["clip_id"], "label": label, "steps": steps}
+        done[r["clip_id"]] = {"clip_id": r["clip_id"], "relevant": relevant, "label": label, "steps": steps}
         with open(lab_path, "w") as fh:
             fh.writelines(json.dumps(v) + "\n" for v in done.values())
         st.rerun()

@@ -14,12 +14,16 @@ import jsonschema
 
 from . import config
 
-def prompt(domain):
+def prompt(domain, request=""):
     d = config.DOMAINS.get(domain, config.DOMAINS["warehouse"])
-    return f"""You are labeling training data for {d['desc']}. Watch the clip and segment the main
-actor's (person's or vehicle's) action into steps. Use only these step names: {", ".join(d['steps'])}.
+    ask = (f'First, VERIFY: does this clip actually show "{request}"? Search engines return clips that '
+           f'only look similar; be strict. ') if request else ""
+    return f"""You are building verified training data for {d['desc']}. Watch the clip.
+{ask}Then segment the main actor's (person's or vehicle's) action into steps, using only these step
+names: {", ".join(d['steps'])}.
 Return ONLY JSON, no prose:
-{{"label": one of {d['labels']},
+{{"matches_request": true or false, "match_conf": 0-1, "evidence": "<what you saw that decides it>",
+ "label": one of {d['labels']},
  "steps": [{{"name": ..., "start_s": ..., "end_s": ..., "conf": 0-1}}],
  "objects": ["..."], "notes": "<one sentence>"}}
 Times are seconds from the start of the clip. If there is no clear action, use label "other"."""
@@ -35,7 +39,8 @@ SCHEMA = {
             "type": "object", "required": ["name", "start_s", "end_s"],
             "properties": {"name": {"enum": config.STEP_NAMES}, "start_s": {"type": "number"},
                            "end_s": {"type": "number"}, "conf": {"type": "number"}}}},
-        "objects": {"type": "array"}, "notes": {"type": "string"}}}
+        "objects": {"type": "array"}, "notes": {"type": "string"},
+        "matches_request": {"type": "boolean"}, "match_conf": {"type": "number"}, "evidence": {"type": "string"}}}
 
 _CLIENT = {}
 
@@ -139,6 +144,13 @@ def _parse(text):
     data.setdefault("objects", [])
     data["objects"] = [str(o) for o in data["objects"]] if isinstance(data["objects"], list) else []
     data["notes"] = str(data.get("notes", ""))
+    m = data.get("matches_request", True)
+    data["matches_request"] = m if isinstance(m, bool) else str(m).strip().lower() in ("true", "yes", "1")
+    try:
+        data["match_conf"] = float(data.get("match_conf", 0.5))
+    except (TypeError, ValueError):
+        data["match_conf"] = 0.5
+    data["evidence"] = str(data.get("evidence", ""))
     jsonschema.validate(data, SCHEMA)
     return data
 
@@ -147,14 +159,15 @@ def _mock(path, duration):
     d = max(duration, 1.0)
     cuts = [0, 0.2, 0.4, 0.7, 1.0]
     names = ["approach", "reach", "grasp", "lift"]
-    return {"label": "pick_up_object", "objects": ["item"], "notes": "mock",
+    return {"label": "pick_up_object", "objects": ["item"], "notes": "mock", "matches_request": True,
+            "match_conf": 0.5, "evidence": "mock",
             "steps": [{"name": n, "start_s": round(a * d, 1), "end_s": round(b * d, 1), "conf": 0.5}
                       for n, a, b in zip(names, cuts, cuts[1:])]}
 
 
-def segment(path, duration, domain=None):
+def segment(path, duration, domain=None, request=""):
     """-> (result dict, seconds spent, error or None)"""
-    PROMPT = prompt(domain or config.DOMAIN)
+    PROMPT = prompt(domain or config.DOMAIN, request)
     t0 = time.time()
     if config.MOCK:
         return _mock(path, duration), 0.0, None
