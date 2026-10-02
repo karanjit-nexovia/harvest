@@ -1,4 +1,33 @@
-# Harvest
+# Blindspot
+
+**Your vision model is already running on every camera. Nobody checks it.**
+Blindspot uses NVIDIA Cosmos3-Reason as a judge over the VAST-indexed video archive, grades the YOLO11
+detections the pipeline stored at ingest, and finds where the model is blind — by object, by camera
+and by condition (lighting, crowding, occlusion, distance). Then it hands you the failing clips as a
+retraining set, and logs the whole audit to Weights & Biases.
+
+> First finding on the event corpus: **forklifts 0% detected** — the deployed COCO model has no
+> forklift class, so every forklift in every warehouse clip is missed or called something else.
+
+| Sponsor tool | Role |
+|---|---|
+| **VAST Data** (DataEngine, VastDB, VSS API) | the indexed archive, search to sample each camera pack, stored YOLO detections, clip streaming |
+| **NVIDIA Cosmos3-Reason** | the judge: a strict inventory of what is really in each clip (objects, counts, conditions) |
+| **YOLO11** | the model under audit (its ingest-time detections) |
+| **Weights & Biases** | the audit report: detection rates, phantoms, failure table with video; W&B Inference powers the Harvest planner |
+| **CoreWeave GPUs** | serve Cosmos3-Reason, YOLO11, Cosmos Embed |
+
+```bash
+python3 -m harvest.audit --cameras sdg_warehouse_cam-2,i24_cam-1,pie_cam-3,smartspace_cam-1 --per-camera 12 --wandb
+python3 -m streamlit run app.py      # Blindspot page: charts, failures, export the retraining set
+```
+
+**[Architecture →](ARCHITECTURE.md)** · **[Inputs, outputs and evaluation →](EVALUATION.md)**
+
+---
+
+## Also in this repo: Harvest (labelled training clips from a plain-English request)
+
 
 **Turn the video archive you already have into training data for AI systems** — warehouse
 robots, self-driving stacks, safety and store analytics. Describe what your system must learn;
