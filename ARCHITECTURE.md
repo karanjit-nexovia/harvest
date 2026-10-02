@@ -6,35 +6,14 @@ and you get a clean, versioned training dataset in Weights & Biases.
 
 ## The picture
 
+![How Harvest works](docs/architecture.png)
+
 ```mermaid
 flowchart LR
-    U["👤 You<br/>'Close call training'<br/>or your own words + objects"]
-    subgraph WB1["Weights & Biases"]
-        P["W&B Inference<br/>Llama-3.1-8B<br/>plans the searches"]
-    end
-    subgraph VAST["VAST Data AI OS"]
-        S[("2,352 indexed segments<br/>VastDB: embeddings, captions,<br/>YOLO11 detections")]
-        API["VSS API<br/>/search · /videos/stream<br/>/videos/detections"]
-        S --- API
-    end
-    subgraph CW["CoreWeave GPUs"]
-        C["NVIDIA Cosmos3-Reason<br/>the judge"]
-    end
-    H["🌾 Harvest"]
-    R["You review<br/>remove wrong clips,<br/>find replacements"]
-    subgraph WB2["Weights & Biases"]
-        T["Table: every clip,<br/>Cosmos vs YOLO11, video"]
-        A["Artifact: the dataset,<br/>versioned v0, v1…"]
-    end
-    U --> H
-    H -- custom request --> P --> H
-    H -- "1 search" --> API
-    API -- "2 clips + YOLO11 detections" --> H
-    H -- "3 does this clip fit? what's in it?" --> C
-    C -- "keep / reject, objects, events" --> H
-    H -- "4 compare with YOLO11" --> R
-    R -- "5 fixed dataset" --> T
-    R --> A
+    A["1 · You<br/>say what to train"] --> B["2 · VAST Data<br/>find the clips"]
+    B --> C["3 · NVIDIA Cosmos<br/>check every clip<br/>(on CoreWeave)"]
+    C --> D["4 · Harvest<br/>compare with YOLO11<br/>+ your review"]
+    D --> E["5 · Weights & Biases<br/>ship the dataset"]
 ```
 
 ## Which organiser tool does what

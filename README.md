@@ -1,5 +1,7 @@
 # Harvest
 
+![How Harvest works](docs/architecture.png)
+
 **Your vision model is already running on every camera. Nobody checks it.**
 Harvest runs a **Blindspot audit**: it uses NVIDIA Cosmos3-Reason as a judge over the VAST-indexed video archive, grades the YOLO11
 detections the pipeline stored at ingest, and finds where the model is blind — by object, by camera
