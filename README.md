@@ -2,7 +2,7 @@
 
 **[▶ Watch the 3-minute demo](https://youtu.be/VZQjUoIeM70)**
 
-[![Harvest demo video](https://img.youtube.com/vi/VZQjUoIeM70/maxresdefault.jpg)](https://youtu.be/VZQjUoIeM70)
+[![Harvest demo video](https://img.youtube.com/vi/VZQjUoIeM70/hqdefault.jpg)](https://youtu.be/VZQjUoIeM70)
 
 ![How Harvest works](docs/architecture.png)
 
