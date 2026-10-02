@@ -120,8 +120,13 @@ def class_counts(det):
     return counts
 
 
+# The GPU host the event's own smoke-test skill uses when the team config lacks the URLs
+# (.cursor/skills/gpu/model-smoke-test: GPU_HOST=166.19.38.112, Cosmos3-Reason on :8001).
+GPU_HOST_DEFAULT = "166.19.38.112"
+
+
 def cosmos_url():
-    return env("COSMOS3_REASON_URL")
+    return env("COSMOS3_REASON_URL") or f"http://{env('GPU_HOST', GPU_HOST_DEFAULT)}:8001"
 
 
 def gpu_token():
