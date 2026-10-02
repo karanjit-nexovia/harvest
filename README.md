@@ -9,6 +9,8 @@ and trains a starter model on it.
 > VSS tells a person what happened. Harvest turns it into data a model can learn from — and proves
 > the data is good.
 
+**[Architecture: how it works and which technology does what →](ARCHITECTURE.md)** · **[Inputs, outputs and evaluation →](EVALUATION.md)**
+
 ```
 query ─► search (VAST / CLIP / motion) ─► YOLO + pose filter (cheap, edge-able)
       ─► cut clips ─► Cosmos: reach / grasp / pull / … with timestamps (JSON)
