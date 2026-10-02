@@ -5,6 +5,7 @@ single /config/<team>.config if the environment lacks them. Nothing is printed o
 import glob
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -35,8 +36,12 @@ def _req(method, path, body=None, auth=True, raw=False, timeout=120):
         headers["Authorization"] = f"Bearer {token()}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        payload = resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read()[:600].decode("utf-8", "replace")
+        raise RuntimeError(f"{method} {path.split('?')[0]} -> HTTP {e.code}: {detail}") from None
     return payload if raw else json.loads(payload)
 
 
@@ -49,9 +54,17 @@ def token(refresh=False):
 
 def search(query, top_k=50, min_similarity=0.3, metadata_filters=None):
     """-> list of hits: {source, original_video, start, end, score, reasoning, camera_id, location}"""
-    body = {"query": query, "top_k": min(100, top_k), "llm_top_n": 0, "min_similarity": min_similarity,
-            "metadata_filters": metadata_filters or {}, "include_public": True}
-    r = _req("POST", "/api/v1/search", body)
+    body = {"query": query, "top_k": min(100, top_k), "llm_top_n": 1, "min_similarity": min_similarity,
+            "include_public": True}
+    if metadata_filters:
+        body["metadata_filters"] = metadata_filters
+    try:
+        r = _req("POST", "/api/v1/search", body)
+    except RuntimeError as e:
+        if "HTTP 422" not in str(e):
+            raise
+        print("search: full request rejected, retrying the minimal one --", str(e)[:300])
+        r = _req("POST", "/api/v1/search", {"query": query, "top_k": min(100, top_k)})
     hits = []
     for x in r.get("results", []):
         def g(*keys, default=None):
