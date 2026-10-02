@@ -110,10 +110,9 @@ def _loads(raw):
     try:
         return json.loads(raw)
     except ValueError:
-        fixed = re.sub(r",\s*([}\]])", r"", raw)                    # trailing commas
-        fixed = re.sub(r"}\s*{", "},{", fixed)                         # missing comma between objects
-        fixed = re.sub(r"\"\s*
-\s*\"", '","', fixed)                    # missing comma between strings
+        fixed = re.sub(r",\s*([}\]])", r"\1", raw)                     # trailing commas
+        fixed = re.sub(r"}\s*{", "},{", fixed)                          # missing comma between objects
+        fixed = re.sub(r"\"\s*\n\s*\"", '","', fixed)                   # missing comma between strings
         return json.loads(fixed)
 
 
