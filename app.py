@@ -5,7 +5,7 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="Harvest", layout="wide")
+st.set_page_config(page_title="Harvest", page_icon="🌾", layout="wide")
 from harvest import config  # noqa: E402
 
 _PALETTE = ["#4C9AFF", "#36B37E", "#FFAB00", "#6554C0", "#00B8D9", "#FF5630", "#FF8B00", "#57D9A3",
@@ -39,86 +39,16 @@ def timeline(rec):
             f'<div style="font-size:12px">{legend}</div>')
 
 
-page = st.sidebar.radio("Page", ["Blindspot audit", "Mine clips", "Label", "Evaluate", "Train"])
-st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if config.MOCK else config.COSMOS_MODEL}")
+st.sidebar.markdown("<div style='font-size:26px;font-weight:800;color:#12372A;letter-spacing:-.5px'>Harvest</div>"
+                    "<div style='font-size:12.5px;color:#5B6B63;margin-bottom:14px'>Find where your vision model "
+                    "is blind. Retrain on the clips.</div>", unsafe_allow_html=True)
+page = st.sidebar.radio("Page", ["Audit", "Mine clips", "Label", "Evaluate", "Train"], label_visibility="collapsed")
+st.sidebar.caption("Mock mode (no keys)" if config.MOCK else
+                   f"Connected: VAST {config.SEARCH_BACKEND.upper()} · NVIDIA Cosmos3-Reason · W&B")
 
-if page == "Blindspot audit":
-    import pandas as pd
-    from harvest import audit
-    st.title("Harvest: Blindspot audit")
-    st.caption("Your perception model is already running on every camera. Where does it fail? Harvest uses "
-               "NVIDIA Cosmos3-Reason as a judge over the VAST archive, grades the YOLO11 detections stored at "
-               "ingest, and hands you the clips to retrain on.")
-    cams = ["sdg_warehouse_cam-2", "i24_cam-1", "pie_cam-3", "smartspace_cam-1", "neighborhood_cam-1",
-            "sf_streets_cam-1"]
-    c1, c2 = st.columns([4, 1])
-    pick = c1.multiselect("Camera packs to audit", cams, cams[:4])
-    per = c2.number_input("clips per camera", 3, 50, 12)
-    if st.button("Run audit", type="primary"):
-        box = st.empty()
-        lines = []
-
-        def progress(msg):
-            lines.append(msg)
-            box.code("\n".join(lines[-14:]))
-
-        audit.run(pick, int(per), progress=progress)
-        st.rerun()
-    audits = sorted([p for p in config.OUT.glob("audit_*") if (p / "report.json").exists()],
-                    key=lambda p: -p.stat().st_mtime)
-    if not audits:
-        st.info("No audit yet.")
-        st.stop()
-    out = st.selectbox("Audit", audits, format_func=lambda p: p.name)
-    rep = json.load(open(out / "report.json"))
-    recs = [json.loads(l) for l in open(out / "clips.jsonl")]
-    run = rep.get("run", {})
-    m = st.columns(4)
-    m[0].metric("Archive", f"{run.get('archive_segments') or 0:,} segments")
-    m[1].metric("Clips audited", run.get("clips", len(recs)))
-    m[2].metric("Cameras", len(run.get("cameras", [])))
-    m[3].metric("Cosmos time", f"{run.get('cosmos_s', 0):.0f} s")
-    st.error(f"Blind spots: {rep['headline']}")
-    df = pd.DataFrame([{"object": o, "seen by Cosmos (clips)": v["seen"], "YOLO11 detected": v["detected"],
-                        "detection rate": v["rate"],
-                        "class in model": "yes" if v["has_class"] else "NO"}
-                       for o, v in rep["objects"].items()])
-    st.subheader("YOLO11 detection rate per object (Cosmos3-Reason as the judge)")
-    st.bar_chart(df.set_index("object")["detection rate"].fillna(0))
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    if rep.get("mislabels"):
-        st.subheader("What YOLO11 calls the objects it can't see")
-        st.dataframe(pd.DataFrame([{"missed object": o, "YOLO said instead": m["yolo_label"], "clips": m["clips"]}
-                                   for o, ms in rep["mislabels"].items() for m in ms]),
-                     use_container_width=True, hide_index=True)
-    if rep.get("phantoms"):
-        st.subheader("Phantom detections — labels YOLO11 reported that nothing in the clip explains")
-        st.dataframe(pd.DataFrame(rep["phantoms_by_camera"]), use_container_width=True, hide_index=True)
-    c1, c2 = st.columns(2)
-    c1.subheader("By camera pack")
-    c1.dataframe(pd.DataFrame(rep["by_camera"]), use_container_width=True, hide_index=True)
-    c2.subheader("By condition")
-    c2.dataframe(pd.DataFrame(rep["by_condition"]), use_container_width=True, hide_index=True)
-    st.subheader("Failures (the retraining set)")
-    fails = [r for r in recs if any(not c["yolo_found"] for c in r["checks"]) or r.get("phantoms")]
-    cols = st.columns(3)
-    for i, r in enumerate(fails[:12]):
-        with cols[i % 3]:
-            st.video(str(out / r["file"]))
-            miss = ", ".join(c["object"] for c in r["checks"] if not c["yolo_found"]) or "—"
-            ph = ", ".join(r.get("phantoms", [])) or "—"
-            st.markdown(f"**YOLO missed: {miss}** · **phantoms: {ph}** · {r['camera_id']}")
-            st.caption(f"Cosmos: {', '.join(o['name'] + ' x' + str(o['count']) for o in r['inventory'])} · "
-                       f"YOLO said: {', '.join(list(r['yolo'])[:5]) or 'nothing'} · {json.dumps(r['conditions'])}")
-            if r.get("notes"):
-                st.caption(r["notes"][:160])
-    b1, b2 = st.columns(2)
-    if b1.button("Log audit to Weights & Biases"):
-        audit.log_wandb(out)
-        b1.success("Logged.")
-    if b2.button("Export retraining set"):
-        z = audit.export_retrain(out)
-        b2.download_button("Download retraining set (zip)", open(z, "rb"), file_name=f"{out.name}_retrain.zip")
+if page == "Audit":
+    from harvest import ui_audit
+    ui_audit.page()
 
 elif page == "Mine clips":
     st.title("Harvest: mine clips")
