@@ -1,0 +1,137 @@
+"""Harvest: turn unlabeled video into robot training data.   streamlit run app.py"""
+import json
+import os
+from pathlib import Path
+
+import streamlit as st
+
+st.set_page_config(page_title="Harvest", layout="wide")
+from harvest import config  # noqa: E402
+
+STEP_COLORS = {"reach": "#4C9AFF", "grasp": "#36B37E", "lift_or_pull": "#FFAB00", "move": "#6554C0",
+               "place": "#00B8D9", "conceal": "#FF5630", "release": "#8993A4", "idle": "#DFE1E6"}
+
+
+def runs():
+    return sorted([p for p in config.OUT.glob("*") if (p / "clips.jsonl").exists()],
+                  key=lambda p: -p.stat().st_mtime)
+
+
+def load(run_dir):
+    recs = [json.loads(l) for l in open(run_dir / "clips.jsonl")]
+    stats = json.load(open(run_dir / "stats.json")) if (run_dir / "stats.json").exists() else {}
+    ev = json.load(open(run_dir / "eval.json")) if (run_dir / "eval.json").exists() else {}
+    return recs, stats, ev
+
+
+def timeline(rec):
+    d = max(0.1, rec["end"] - rec["start"])
+    bars = "".join(
+        f'<div title="{s["name"]} {s["start_s"]:.1f}-{s["end_s"]:.1f}s" style="position:absolute;'
+        f'left:{100 * max(0, s["start_s"]) / d:.1f}%;width:{100 * max(0.02, s["end_s"] - s["start_s"]) / d:.1f}%;'
+        f'top:0;bottom:0;background:{STEP_COLORS.get(s["name"], "#999")};border-right:1px solid #fff"></div>'
+        for s in rec["steps"])
+    legend = " ".join(f'<span style="color:{STEP_COLORS.get(s["name"])}">■</span>{s["name"]}' for s in rec["steps"])
+    return (f'<div style="position:relative;height:14px;background:#eee;border-radius:3px;overflow:hidden">{bars}</div>'
+            f'<div style="font-size:12px">{legend}</div>')
+
+
+page = st.sidebar.radio("Page", ["Harvest", "Label", "Evaluate"])
+st.sidebar.caption(f"Search: {config.SEARCH_BACKEND} · Cosmos: {'MOCK' if config.MOCK else config.COSMOS_MODEL}")
+
+if page == "Harvest":
+    st.title("Harvest")
+    st.caption("Ask for an action in plain English. Get back segmented, labelled training clips.")
+    c1, c2 = st.columns([4, 1])
+    query = c1.text_input("What do you need examples of?", "person takes an item from a shelf")
+    k = c2.number_input("max ranges", 5, 500, 50)
+    with st.expander("Filter settings"):
+        os.environ["HAND_ACTIVITY"] = str(st.slider("Hand activity needed", 0.1, 1.0, 0.35, 0.05))
+    if st.button("Harvest", type="primary"):
+        from harvest import pipeline
+        box = st.empty()
+        lines = []
+
+        def progress(msg):
+            lines.append(msg)
+            box.code("\n".join(lines[-12:]))
+
+        pipeline.run(query, k=int(k), progress=progress)
+        st.rerun()
+    all_runs = runs()
+    if not all_runs:
+        st.info("No runs yet.")
+        st.stop()
+    run_dir = st.selectbox("Run", all_runs, format_func=lambda p: p.name)
+    recs, stats, ev = load(run_dir)
+    if stats:
+        m = st.columns(5)
+        m[0].metric("Video searched", f"{stats['searched_video_s'] / 60:.1f} min")
+        m[1].metric("Candidate ranges", stats["ranges"])
+        m[2].metric("YOLO kept", stats["kept"])
+        m[3].metric("Cosmos labelled", stats["labelled"])
+        if ev.get("cost", {}).get("saving_x"):
+            m[4].metric("GPU saved vs Cosmos-on-all", f"{ev['cost']['saving_x']}x")
+    if ev.get("accuracy"):
+        a = ev["accuracy"]
+        st.success(f"vs hand labels ({a['clips_compared']} clips): label {a['label_acc']:.0%} · "
+                   f"step recall {a['step_recall']:.0%} · precision {a['step_precision']:.0%} · "
+                   f"boundary ±{a['boundary_err_s']}s")
+    cols = st.columns(3)
+    for i, r in enumerate(recs):
+        with cols[i % 3]:
+            st.video(str(run_dir / r["file"]))
+            st.markdown(f"**{r['label']}** · {r['video']} {r['start']:.0f}-{r['end']:.0f}s"
+                        + (f" · ⚠ {r['error'][:60]}" if r.get("error") else ""))
+            st.markdown(timeline(r), unsafe_allow_html=True)
+    if st.button("Export dataset"):
+        from harvest import export
+        zip_path, n = export.export(run_dir)
+        st.download_button(f"Download {n} clips (zip)", open(zip_path, "rb"), file_name=f"{run_dir.name}.zip")
+
+elif page == "Label":
+    st.title("Hand labels")
+    st.caption("Label clips BEFORE looking at Cosmos's answer. These are the ground truth for the eval.")
+    all_runs = runs()
+    if not all_runs:
+        st.stop()
+    run_dir = st.selectbox("Run", all_runs, format_func=lambda p: p.name)
+    recs, _, _ = load(run_dir)
+    lab_path = run_dir / "labels.jsonl"
+    done = {}
+    if lab_path.exists():
+        for l in open(lab_path):
+            t = json.loads(l); done[t["clip_id"]] = t
+    st.write(f"{len(done)} of {len(recs)} labelled")
+    todo = [r for r in recs if r["clip_id"] not in done] or recs
+    r = st.selectbox("Clip", todo, format_func=lambda r: r["clip_id"])
+    st.video(str(run_dir / r["file"]))
+    d = r["end"] - r["start"]
+    label = st.selectbox("Label", config.LABELS)
+    n = st.number_input("How many steps", 0, 8, 3)
+    steps = []
+    for j in range(int(n)):
+        c = st.columns(3)
+        name = c[0].selectbox(f"step {j + 1}", config.STEP_NAMES, key=f"n{j}")
+        a = c[1].number_input("start s", 0.0, d, min(d, j * d / max(1, n)), 0.1, key=f"a{j}")
+        b = c[2].number_input("end s", 0.0, d, min(d, (j + 1) * d / max(1, n)), 0.1, key=f"b{j}")
+        steps.append({"name": name, "start_s": a, "end_s": b})
+    if st.button("Save label", type="primary"):
+        done[r["clip_id"]] = {"clip_id": r["clip_id"], "label": label, "steps": steps}
+        with open(lab_path, "w") as fh:
+            fh.writelines(json.dumps(v) + "\n" for v in done.values())
+        st.rerun()
+
+else:
+    st.title("Accuracy and cost")
+    all_runs = runs()
+    if not all_runs:
+        st.stop()
+    run_dir = st.selectbox("Run", all_runs, format_func=lambda p: p.name)
+    log = st.checkbox("Log to Weights & Biases")
+    if st.button("Evaluate", type="primary"):
+        from harvest import evaluate
+        out = evaluate.evaluate(run_dir, use_wandb=log)
+        st.json(out)
+    elif (run_dir / "eval.json").exists():
+        st.json(json.load(open(run_dir / "eval.json")))

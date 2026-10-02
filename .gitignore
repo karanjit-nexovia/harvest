@@ -1,0 +1,7 @@
+.venv/
+out/
+.env
+*.pt
+__pycache__/
+data/raw/*
+!data/raw/.gitkeep
