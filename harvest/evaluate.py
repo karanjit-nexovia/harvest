@@ -8,6 +8,7 @@ labels.jsonl: one {"clip_id", "label", "steps":[{"name","start_s","end_s"}]} per
 Cost: A = Cosmos on every searched range (cosmos seconds per clip x all ranges);
       B = YOLO on every range + Cosmos only on the kept ones (what Harvest does)."""
 import argparse
+import os
 import json
 from pathlib import Path
 
@@ -79,7 +80,7 @@ def evaluate(run_dir, labels=None, use_wandb=False):
     json.dump(out, open(run_dir / "eval.json", "w"), indent=1)
     if use_wandb:
         import wandb
-        wb = wandb.init(project=config.WANDB_PROJECT, name=run_dir.name, config=stats)
+        wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None, name=run_dir.name, config=stats)
         wb.log({**{f"acc/{k}": v for k, v in acc.items() if v is not None},
                 **{f"cost/{k}": v for k, v in c.items() if isinstance(v, (int, float))}})
         table = wandb.Table(columns=["clip", "label", "steps", "truth_label", "video"])

@@ -9,6 +9,7 @@ the score is on clips the model never saw. Writes model.joblib + train.json, log
     python -m harvest.train out/<run> [--wandb]
 """
 import argparse
+import os
 import json
 import random
 from pathlib import Path
@@ -128,7 +129,7 @@ def train(run_dir, use_wandb=False, seed=7):
     json.dump(out, open(Path(run_dir) / "train.json", "w"), indent=1)
     if use_wandb:
         import wandb
-        wb = wandb.init(project=config.WANDB_PROJECT, name=f"train-{Path(run_dir).name}", job_type="train")
+        wb = wandb.init(project=config.WANDB_PROJECT, entity=os.getenv("WANDB_TEAM") or None, name=f"train-{Path(run_dir).name}", job_type="train")
         wb.log({"train/frame_acc": out["frame_acc"], "train/macro_f1": out["macro_f1"],
                 "train/baseline_acc": out["baseline_majority_acc"],
                 "train/confusion": wandb.plot.confusion_matrix(y_true=yte, preds=list(pred),
