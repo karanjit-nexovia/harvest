@@ -38,19 +38,27 @@ def plan(use_case):
             "by": p.get("planner", "none")}
 
 
-def find(p, n):
-    """VAST search, round-robin over cameras x queries, until n distinct clips."""
-    hits, seen = [], set()
-    for q in p["queries"]:
+def find(p, n, exclude=(), depth=0, extra_queries=()):
+    """VAST search, round-robin over cameras x queries, until n distinct clips not in `exclude`.
+    Each deeper round asks VAST for more results per search, so it reaches past the clips already checked."""
+    hits, seen = [], set(exclude)
+    queries = list(p["queries"]) + [q for q in extra_queries if q and q not in p["queries"]]
+    per = max(2, n // max(1, len(p["cameras"])) + 1)
+    top_k = min(100, per * (depth + 2) + len(seen))
+    for q in queries:
         for cam in p["cameras"]:
             try:
-                res = vss.search(q, top_k=max(3, n), min_similarity=0.0, metadata_filters={"camera_id": cam})
+                res = vss.search(q, top_k=top_k, min_similarity=0.0, metadata_filters={"camera_id": cam})
             except Exception:  # noqa: BLE001 -- one bad search must not stop the flow
                 continue
-            for h in res[:max(2, n // max(1, len(p["cameras"])) + 1)]:
+            took = 0
+            for h in res:
+                if took >= per:
+                    break
                 if h["source"] not in seen and h.get("camera_id", cam) in (cam, ""):
                     seen.add(h["source"])
                     hits.append(dict(h, query=q, camera_id=h.get("camera_id") or cam))
+                    took += 1
     # interleave cameras so a small n still covers them
     by_cam = {}
     for h in hits:
@@ -112,14 +120,39 @@ def request_text(use_case, spec):
     return s
 
 
-def run(use_case, n=6, on_step=None, on_clip=None, spec=None):
+def _check(h, cid, out, st, spec):
+    """Download one clip, Cosmos checks it against the request, compare with YOLO11 -> record."""
+    path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
+    det = vss.detections(h["source"])
+    yolo, yolo_avg = vss.class_counts(det), vss.per_frame(det)
+    inv, secs, err = audit.inventory(path, request=st["request"])
+    checks, phantoms = audit.compare(inv, yolo, yolo_avg, err)
+    seen_objs = {o["name"] for o in inv["objects"]}
+    lacking = [m for m in spec.get("must", []) if m not in seen_objs]
+    light_ok = spec.get("lighting", "any") in ("any", "", None) or inv["conditions"].get("lighting") == spec["lighting"]
+    if lacking:
+        inv["matches"], inv["match_reason"] = False, f"Cosmos did not see: {', '.join(lacking)}. " + inv.get("match_reason", "")
+    elif not light_ok:
+        inv["matches"], inv["match_reason"] = False, f"lighting is {inv['conditions'].get('lighting')}, not {spec['lighting']}"
+    return {"clip_id": cid, "camera_id": h["camera_id"], "source": h["source"], "query": h["query"],
+            "file": f"clips/{cid}.mp4", "yolo": yolo, "inventory": inv["objects"],
+            "conditions": inv["conditions"], "summary": inv.get("summary", ""), "events": inv.get("events", []),
+            "matches": bool(inv.get("matches")) and not err, "match_reason": inv.get("match_reason", ""),
+            "duration_s": audit.clip_seconds(path), "checks": checks, "phantoms": phantoms, "error": err,
+            "cosmos_s": round(secs, 1), "round": st["rounds"]}
+
+
+def run(use_case, n=15, on_step=None, on_clip=None, spec=None, target=6, max_rounds=4):
     """The whole flow; writes out/flow_<time>/state.json as it goes.
+    Checks n clips per round and keeps searching deeper, round after round, until Cosmos has kept `target`
+    clips, the archive has no unseen matches left, or max_rounds is reached.
     spec (custom requests): {"cameras": [...], "must": [objects], "lighting": "any|day|night|dim|backlit"}"""
     step = on_step or (lambda k, msg: None)
     spec = spec or {}
     out = config.OUT / f"flow_{time.strftime('%m%d_%H%M%S')}"
     (out / "clips").mkdir(parents=True, exist_ok=True)
-    st = {"use_case": use_case, "spec": spec, "started": time.time(), "clips": []}
+    st = {"use_case": use_case, "spec": spec, "started": time.time(), "clips": [], "found": [], "skipped": [],
+          "target": target, "per_round": n, "rounds": 0}
 
     def save():
         json.dump(st, open(out / "state.json", "w"), indent=1)
@@ -130,50 +163,42 @@ def run(use_case, n=6, on_step=None, on_clip=None, spec=None):
     st["request"] = request_text(use_case, spec)
     step("plan", st["plan"])
     vss.token(refresh=True)   # a fresh VAST login for every run; the app may have been up for hours
-    pool_hits = find(st["plan"], n + 4)   # spares, in case a clip will not download
-    hits = pool_hits[:n]
-    st["found"] = [{"source": h["source"], "camera_id": h["camera_id"], "query": h["query"],
-                    "score": h.get("score")} for h in hits]
     st["archive_segments"] = vss.archive_segments()
-    save()
-    step("found", st["found"])
-    spares = pool_hits[n:]
-    st["skipped"] = []
-    queue, i = list(hits), 0
-    while queue:
-        h = queue.pop(0)
-        cid = f"clip_{i:02d}"
-        try:
-            path = vss.download(h["source"], out / "clips" / f"{cid}.mp4")
-        except Exception as e:  # noqa: BLE001 -- one bad segment must not stop the dataset
-            st["skipped"].append({"source": h["source"], "camera_id": h["camera_id"], "error": str(e)[:160]})
-            if spares:
-                queue.append(spares.pop(0))
-            save()
-            step("skipped", st["skipped"][-1])
-            continue
-        i += 1
-        det = vss.detections(h["source"])
-        yolo, yolo_avg = vss.class_counts(det), vss.per_frame(det)
-        inv, secs, err = audit.inventory(path, request=st["request"])
-        checks, phantoms = audit.compare(inv, yolo, yolo_avg, err)
-        seen_objs = {o["name"] for o in inv["objects"]}
-        lacking = [m for m in spec.get("must", []) if m not in seen_objs]
-        light_ok = spec.get("lighting", "any") in ("any", "", None) or inv["conditions"].get("lighting") == spec["lighting"]
-        if lacking:
-            inv["matches"], inv["match_reason"] = False, f"Cosmos did not see: {', '.join(lacking)}. " + inv.get("match_reason", "")
-        elif not light_ok:
-            inv["matches"], inv["match_reason"] = False, f"lighting is {inv['conditions'].get('lighting')}, not {spec['lighting']}"
-        rec = {"clip_id": cid, "camera_id": h["camera_id"], "source": h["source"], "query": h["query"],
-               "file": f"clips/{cid}.mp4", "yolo": yolo, "inventory": inv["objects"],
-               "conditions": inv["conditions"], "summary": inv.get("summary", ""), "events": inv.get("events", []),
-               "matches": bool(inv.get("matches")) and not err, "match_reason": inv.get("match_reason", ""),
-               "duration_s": audit.clip_seconds(path), "checks": checks, "phantoms": phantoms, "error": err,
-               "cosmos_s": round(secs, 1)}
-        st["clips"].append(rec)
+    seen = set()
+    kept_n = 0
+    while kept_n < target and st["rounds"] < max_rounds:
+        st["rounds"] += 1
+        extra = [use_case] if st["rounds"] > 1 else []   # widen the search after the first round
+        batch = find(st["plan"], n + 4, exclude=seen, depth=st["rounds"] - 1, extra_queries=extra)
+        if not batch:
+            st["exhausted"] = True
+            break
+        seen.update(h["source"] for h in batch)
+        st["found"] += [{"source": h["source"], "camera_id": h["camera_id"], "query": h["query"],
+                         "score": h.get("score"), "round": st["rounds"]} for h in batch[:n]]
         save()
-        if on_clip:
-            on_clip(rec, out)
+        step("found", {"round": st["rounds"], "clips": len(batch[:n]), "kept": kept_n})
+        queue, spares, checked = list(batch[:n]), list(batch[n:]), 0
+        while queue and kept_n < target:
+            h = queue.pop(0)
+            cid = f"clip_{len(st['clips']):02d}"
+            try:
+                rec = _check(h, cid, out, st, spec)
+            except Exception as e:  # noqa: BLE001 -- one bad segment must not stop the dataset
+                st["skipped"].append({"source": h["source"], "camera_id": h["camera_id"], "error": str(e)[:160]})
+                if spares:
+                    queue.append(spares.pop(0))
+                save()
+                step("skipped", st["skipped"][-1])
+                continue
+            checked += 1
+            st["clips"].append(rec)
+            kept_n += rec["matches"]
+            save()
+            if on_clip:
+                on_clip(rec, out)
+        step("round_done", {"round": st["rounds"], "checked": checked, "kept": kept_n, "target": target})
+    st["reached_target"] = kept_n >= target
     kept = [r for r in st["clips"] if r["matches"]]
     rep = audit.report(kept) if kept else {"objects": {}, "mislabels": {}, "phantoms": []}
     st["report"] = {k: rep.get(k) for k in ("headline", "objects", "mislabels", "phantoms")}
@@ -267,10 +292,11 @@ def export(out, wandb_log=True):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("use_case", nargs="?", default="Close call training")
-    ap.add_argument("--clips", type=int, default=6)
+    ap.add_argument("--clips", type=int, default=15, help="clips checked per round")
+    ap.add_argument("--target", type=int, default=6, help="keep searching until this many are kept")
     ap.add_argument("--wandb", action="store_true")
     a = ap.parse_args()
-    out, st = run(a.use_case, a.clips, on_step=lambda k, v: print(k, json.dumps(v)[:200]),
+    out, st = run(a.use_case, a.clips, target=a.target, on_step=lambda k, v: print(k, json.dumps(v)[:200]),
                   on_clip=lambda r, o: print(" ", "KEEP" if r["matches"] else "drop", r["camera_id"], "|",
                                              r["summary"][:80], "| yolo missed",
                                              [c["object"] for c in r["checks"] if not c["yolo_found"]]))

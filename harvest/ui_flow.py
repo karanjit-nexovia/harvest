@@ -85,13 +85,22 @@ def _results(state, out):
     st.markdown('<div class="fl-box">' + "".join(f'<span class="fl-q">“{_e(q)}”</span>' for q in p.get("queries", []))
                 + ' on ' + ", ".join(_e(_cam(c)) for c in p.get("cameras", []))
                 + f' → <b>{len(state.get("found", []))} clips</b>'
+                + (f' over <b>{state["rounds"]} rounds</b>' if state.get("rounds", 1) > 1 else "")
                 + (f'<br>Cosmos checks each clip against: <i>“{_e(state["request"])}”</i>' if state.get("request") else "")
                 + (f'<br><span style="color:#B45309">{len(state["skipped"])} clip(s) skipped: the VAST video server did not '
                    'return them (replaced with spares)</span>' if state.get("skipped") else "")
                 + '</div>', unsafe_allow_html=True)
 
     _sec(3, f"Cosmos check: {len(kept)} of {len(clips)} clips kept",
-         "NVIDIA Cosmos3-Reason watched every clip and kept only the ones that really show the use case.")
+         "NVIDIA Cosmos3-Reason watched every clip and kept only the ones that really show the use case."
+         + (f" Target: {state['target']} good clips." if state.get("target") else ""))
+    if state.get("target") and not state.get("reached_target"):
+        why = ("the archive has no more unseen matches" if state.get("exhausted")
+               else f"stopped after {state.get('rounds')} rounds")
+        st.markdown(f'<div class="fl-box" style="border-color:#FDE68A;background:#FFFBEB">Only <b>{len(kept)}</b> of '
+                    f'the {state["target"]} good clips needed: {why}. Cosmos rejected the rest as not showing '
+                    f'“{_e(state.get("use_case", ""))}”. Try a broader description or other cameras.</div>',
+                    unsafe_allow_html=True)
     if clips:
         cols = st.columns(3)
         for i, r in enumerate(sorted(clips, key=lambda r: not r["matches"])):
@@ -207,8 +216,12 @@ def page():
         spec["lighting"] = a3.selectbox("Lighting", ["any"] + _audit.CONDITIONS["lighting"])
         st.caption("Your description searches the archive (planned by W&B Inference) and is what Cosmos checks every "
                    "clip against. Clips missing a must-show object, or in the wrong lighting, are rejected.")
-    b0, b, c = st.columns([5, 1, 1.4])
-    n = b.number_input("Clips", 2, 15, 6, label_visibility="collapsed")
+    b0, t, b, c = st.columns([3.2, 1.3, 1.3, 1.4])
+    b0.markdown('<div class="hv-sub" style="margin-top:30px">Harvest keeps checking new clips, round after round '
+                '(up to 4), until Cosmos has kept enough good ones.</div>', unsafe_allow_html=True)
+    target = t.number_input("Good clips needed", 1, 30, 6)
+    n = b.number_input("Clips per round", 3, 30, 15)
+    c.markdown('<div style="height:28px"></div>', unsafe_allow_html=True)
     run = c.button("Build dataset", type="primary", use_container_width=True, disabled=not (uc or "").strip())
 
     if run:
@@ -219,10 +232,17 @@ def page():
         seen = []
         status.markdown('<div class="hv-live">Planning the search and searching VAST…</div>', unsafe_allow_html=True)
 
+        prog = {"kept": 0, "round": 1}
+
         def on_step(k, v):
             if k == "found":
-                status.markdown(f'<div class="hv-live">Found <b>{len(v)}</b> clips. Cosmos is checking them…</div>',
+                prog["round"] = v["round"]
+                status.markdown(f'<div class="hv-live">Round <b>{v["round"]}</b>: found <b>{v["clips"]}</b> new clips in '
+                                f'VAST. Cosmos is checking them… (kept {v["kept"]} of {int(target)} needed)</div>',
                                 unsafe_allow_html=True)
+            elif k == "round_done" and v["kept"] < v["target"]:
+                status.markdown(f'<div class="hv-live">Round {v["round"]}: only <b>{v["kept"]}</b> of {v["target"]} good '
+                                'clips so far. Searching deeper in the archive…</div>', unsafe_allow_html=True)
             elif k == "compared":
                 status.markdown('<div class="hv-live">Compared with YOLO11. Cosmos is writing suggestions…</div>',
                                 unsafe_allow_html=True)
@@ -231,9 +251,11 @@ def page():
             seen.append(rec)
             with cols3[(len(seen) - 1) % 3]:
                 _card(rec, out)
-            status.markdown(f'<div class="hv-live">Cosmos checked <b>{len(seen)}</b> clips…</div>', unsafe_allow_html=True)
+            prog["kept"] += rec["matches"]
+            status.markdown(f'<div class="hv-live">Round <b>{prog["round"]}</b> · Cosmos checked <b>{len(seen)}</b> clips · '
+                            f'kept <b>{prog["kept"]}</b> of {int(target)} needed</div>', unsafe_allow_html=True)
 
-        out, _ = flow.run(uc.strip(), int(n), on_step=on_step, on_clip=on_clip, spec=spec)
+        out, _ = flow.run(uc.strip(), int(n), on_step=on_step, on_clip=on_clip, spec=spec, target=int(target))
         st.session_state["flow_dir"] = str(out)
         st.rerun()
 
